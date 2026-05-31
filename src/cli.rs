@@ -137,7 +137,12 @@ pub struct AppArgs {
     )]
     pub slice_name: String,
     /// Unit type (overridable by `$UWSM_APP_UNIT_TYPE`).
-    #[arg(short = 't', long = "type", default_value = "scope")]
+    #[arg(
+        short = 't',
+        long = "type",
+        env = "UWSM_APP_UNIT_TYPE",
+        default_value = "scope"
+    )]
     pub app_unit_type: AppUnitType,
     /// Launch in a terminal.
     #[arg(short = 'T', long = "terminal")]

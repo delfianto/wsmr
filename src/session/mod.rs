@@ -12,6 +12,7 @@ pub mod finalize;
 pub mod helpers;
 pub mod prepare;
 pub mod start;
+pub mod stop;
 pub mod wait;
 
 use crate::error::Result;
