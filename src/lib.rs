@@ -6,6 +6,7 @@
 //! See `docs/uwsm-core-analysis.md` for the porting plan and `REFERENCE.md`
 //! (local, not committed) for the upstream Python mechanics.
 
+pub mod app;
 pub mod cli;
 pub mod comp;
 pub mod env;

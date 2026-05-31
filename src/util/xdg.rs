@@ -21,6 +21,34 @@ pub fn runtime_dir() -> Result<PathBuf> {
         .ok_or_else(|| Error::EnvMissing("XDG_RUNTIME_DIR".into()))
 }
 
+/// `$XDG_DATA_HOME`, falling back to `$HOME/.local/share`.
+pub fn data_home() -> PathBuf {
+    if let Some(v) = non_empty_var("XDG_DATA_HOME") {
+        return PathBuf::from(v);
+    }
+    match std::env::var("HOME") {
+        Ok(h) => PathBuf::from(h).join(".local/share"),
+        Err(_) => PathBuf::from(".local/share"),
+    }
+}
+
+/// `$XDG_DATA_DIRS`, falling back to `/usr/local/share:/usr/share`.
+pub fn data_dirs() -> Vec<PathBuf> {
+    non_empty_var("XDG_DATA_DIRS")
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".to_string())
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Full data hierarchy in search order: `data_home` first, then `data_dirs`.
+pub fn data_paths() -> Vec<PathBuf> {
+    let mut v = vec![data_home()];
+    v.extend(data_dirs());
+    v
+}
+
 fn non_empty_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
