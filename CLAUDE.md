@@ -19,21 +19,18 @@ read-only source material — do not edit it).
 
 ## ⚠️ Critical constraint: macOS dev host, Linux-only target
 
-Development happens on **macOS**, but `wsmr` targets **Linux only** — it depends
-on systemd, D-Bus, and Wayland, none of which exist on macOS, and linking
-`libsystemd`/`libdbus` will fail here.
+Development happens on **macOS**, but `wsmr` targets **Linux only** — it relies on
+systemd, D-Bus, and Wayland at *runtime*, none of which exist on macOS.
 
 Consequences:
-- `cargo check` / `cargo build` work **only while the code stays
-  platform-neutral**. Once real systemd/D-Bus FFI lands, native macOS builds
-  will break — that is expected.
-- `cargo run` and the `/run` and `/verify` skills **cannot exercise this app on
-  macOS**. Don't claim runtime behavior was verified unless it ran on Linux.
-- A Linux execution path (container/VM + `ubuntu-latest` CI) is required before
-  any runtime testing. **`podman` is available on this machine.**
-- **Deferred (do not build yet — "far ahead"):** integration tests gated on
-  detecting `podman`/`docker`, spinning an ephemeral Linux+systemd container to
-  run real session-management assertions, skipping cleanly when absent.
+- The crate is **pure Rust** (`zbus`, `nix`, `libc`) — **no C-library linking**, so
+  it **builds and unit-tests on macOS**. The only platform-specific syscall (pidfd
+  `waitpid`) is `cfg(target_os = "linux")`-gated with a non-Linux stub.
+- What macOS **cannot** do is *run* the session logic (no systemd/D-Bus/Wayland).
+  `cargo run` / `/run` / `/verify` can't exercise it — don't claim runtime behavior
+  was verified unless it ran on Linux.
+- **Linux build/test runs in Podman** (see below). Tier A (build + unit tests on
+  Linux) works today; Tier B (systemd-as-PID-1 integration tests) is next.
 
 ## Commands
 
@@ -46,9 +43,23 @@ cargo fmt            # format
 cargo run -- <args>  # Linux only once systemd/D-Bus code exists
 ```
 
-When checking that Linux-only code compiles without a Linux host, prefer
-`cargo check --target x86_64-unknown-linux-gnu` (type-checks; will not fully
-link system libs).
+## Linux build/test (Podman)
+
+`podman` runs a Linux VM here. Use the wrapper scripts — a bare `cargo test` on
+macOS only covers platform-neutral logic, never the Linux paths:
+
+```bash
+scripts/linux-test.sh [filter]   # build + cargo test inside a Debian container
+scripts/linux-build.sh           # cargo build --all-targets + clippy -D warnings on Linux
+```
+
+- `Containerfile`: Rust + `build-essential` only (NO libdbus/libsystemd — wsmr is
+  pure-Rust `zbus` and shells out to `systemctl`/`systemd-notify`).
+- Source is live bind-mounted; the cargo registry and the Linux `target/` are
+  named volumes (`wsmr-cargo-registry`, `wsmr-linux-target`) kept separate from the
+  host's macOS `target/`.
+- **Tier B (planned):** a `podman run --systemd=always` PID-1 container for real
+  integration tests of prepare-env/exec/start against live systemd + D-Bus.
 
 ## What's being ported (reference map)
 
