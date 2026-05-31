@@ -8,8 +8,8 @@
 use anyhow::Result;
 use clap::Parser;
 use wsmr::cli::{
-    AppArgs, AuxAction, AuxArgs, AuxIdArgs, CheckArgs, CheckCmd, Cli, Command, FinalizeArgs,
-    Rung as CliRung, StartArgs, StopArgs,
+    AppArgs, AppUnitType as CliAppUnitType, AuxAction, AuxArgs, AuxIdArgs, CheckArgs, CheckCmd,
+    Cli, Command, FinalizeArgs, Rung as CliRung, Silence as CliSilence, StartArgs, StopArgs,
 };
 use wsmr::comp::{CompGlobals, ResolveInput};
 use wsmr::error::{Error, Result as WResult};
@@ -49,8 +49,12 @@ fn start(args: StartArgs) -> WResult<()> {
     session::start::run(&comp, &opts)
 }
 
-fn stop(_args: StopArgs) -> WResult<()> {
-    Err(Error::todo("M4", "session stop"))
+fn stop(args: StopArgs) -> WResult<()> {
+    session::stop::run_stop(&session::stop::StopOpts {
+        dry_run: args.dry_run,
+        remove: args.remove,
+        rung: rung(args.unit_rung),
+    })
 }
 
 fn finalize(args: FinalizeArgs) -> WResult<()> {
@@ -64,13 +68,42 @@ fn finalize(args: FinalizeArgs) -> WResult<()> {
     session::finalize::finalize(&vars)
 }
 
-fn app(_args: AppArgs) -> WResult<()> {
-    Err(Error::todo("M5", "app launching"))
+fn app(args: AppArgs) -> WResult<()> {
+    use wsmr::app::launch::{self, AppOpts, Silence, UnitType};
+    let unit_type = match args.app_unit_type {
+        CliAppUnitType::Scope => UnitType::Scope,
+        CliAppUnitType::Service => UnitType::Service,
+    };
+    let silent = args.silent.map(|s| match s {
+        CliSilence::Out => Silence::Out,
+        CliSilence::Err => Silence::Err,
+        CliSilence::Both => Silence::Both,
+    });
+    launch::run(AppOpts {
+        cmdline: args.cmdline,
+        slice: args.slice_name,
+        unit_type,
+        terminal: args.terminal,
+        app_name: args.app_name,
+        unit_name: args.unit_name,
+        description: args.unit_description,
+        unit_properties: args.unit_properties,
+        silent,
+    })
 }
 
 fn check(args: CheckArgs) -> WResult<()> {
     match args.what {
-        CheckCmd::IsActive(_) => Err(Error::todo("M4", "check is-active")),
+        CheckCmd::IsActive(a) => {
+            let active = session::stop::is_active(&SessionBus::connect()?)?;
+            if a.verbose {
+                println!("{}", if active { "active" } else { "inactive" });
+            }
+            if !active {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         CheckCmd::MayStart(_) => Err(Error::todo("M6", "check may-start")),
     }
 }

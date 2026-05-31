@@ -131,6 +131,36 @@ pub fn generate(dir: &Path, ctx: &RenderCtx, dropins: &DropinInput) -> Result<Ge
     Ok(out)
 }
 
+/// Remove all wsmr-generated units from `dir`: the static graph files and any
+/// per-compositor `wayland-wm{,-env}@*.service.d` drop-in directories.
+pub fn remove_all(dir: &Path) -> Result<GenOutcome> {
+    let mut out = GenOutcome::default();
+    if !dir.exists() {
+        return Ok(out);
+    }
+    for unit in templates::GRAPH {
+        if remove_unit(dir, unit.name)? {
+            out.changed = true;
+            out.removed.push(unit.name.to_string());
+        }
+    }
+    for entry in std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))? {
+        let entry = entry.map_err(|e| Error::io(dir, e))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".service.d")
+            && (name.starts_with("wayland-wm@") || name.starts_with("wayland-wm-env@"))
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).map_err(|e| Error::io(&path, e))?;
+                out.changed = true;
+                out.removed.push(name);
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
