@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Reliable gate: formatting, lints, and the unit tests — on real Linux, so this
+  # also compiles the cfg(target_os = "linux") code (e.g. the pidfd waitpid) that
+  # never builds on the macOS dev host.
+  lint-test:
+    name: fmt + clippy + test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: test
+        run: cargo test --all-features
+
+  # Tier-B: full session bootstrap against real systemd, in a Podman container.
+  # Best-effort in CI (systemd-as-PID-1 in a runner can be finicky); kept as a
+  # separate job so a hiccup here never masks the lint-test gate.
+  integration:
+    name: systemd integration (Podman Tier B)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+      - name: Run integration harness
+        run: ./scripts/linux-integration.sh
