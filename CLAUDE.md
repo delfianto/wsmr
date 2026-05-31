@@ -49,8 +49,10 @@ cargo run -- <args>  # Linux only once systemd/D-Bus code exists
 macOS only covers platform-neutral logic, never the Linux paths:
 
 ```bash
-scripts/linux-test.sh [filter]   # build + cargo test inside a Debian container
+scripts/linux-test.sh [filter]   # build + cargo test inside a Debian container (Tier A)
 scripts/linux-build.sh           # cargo build --all-targets + clippy -D warnings on Linux
+scripts/linux-integration.sh     # full session bootstrap on real systemd (Tier B)
+# or via the Makefile: make test-unit / test-linux / test-integration / test
 ```
 
 - `Containerfile`: Rust + `build-essential` only (NO libdbus/libsystemd — wsmr is
@@ -58,8 +60,11 @@ scripts/linux-build.sh           # cargo build --all-targets + clippy -D warning
 - Source is live bind-mounted; the cargo registry and the Linux `target/` are
   named volumes (`wsmr-cargo-registry`, `wsmr-linux-target`) kept separate from the
   host's macOS `target/`.
-- **Tier B (planned):** a `podman run --systemd=always` PID-1 container for real
-  integration tests of prepare-env/exec/start against live systemd + D-Bus.
+- **Tier B (`Containerfile.systemd`):** boots systemd as PID 1, starts a user
+  manager via linger, and runs `tests/integration/smoke.sh` — drives `wsmr start`
+  with a stub compositor and asserts the full lifecycle (generate → prepare-env →
+  readiness → `graphical-session.target` → shutdown → cleanup). This is wsmr's
+  real runtime verification; the session bootstrap (M3) passes here.
 
 ## What's being ported (reference map)
 
