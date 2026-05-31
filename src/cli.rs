@@ -218,6 +218,9 @@ pub enum AuxAction {
     CleanupEnv,
     /// Exec the compositor with the autoready watcher.
     Exec(AuxIdArgs),
+    /// Internal: readiness watcher spawned by `aux exec`.
+    #[command(hide = true)]
+    Readiness(AuxIdArgs),
     /// Wait for a PID to exit.
     Waitpid(WaitpidArgs),
     /// Wait for variables to appear in the activation environment.
