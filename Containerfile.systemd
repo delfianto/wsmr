@@ -1,0 +1,26 @@
+# Tier-B: systemd-as-PID-1 Linux container for wsmr *integration* tests.
+#
+# Unlike Containerfile (Tier A, build+unit tests), this boots real systemd so we
+# can exercise the session lifecycle against a live user manager + D-Bus. The
+# wsmr binary is built by Tier A and mounted in from the `wsmr-linux-target`
+# volume — no Rust toolchain here.
+FROM debian:bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV container=podman
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        systemd systemd-sysv dbus dbus-user-session libpam-systemd \
+        procps iproute2 sudo ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    # trim units that are pointless in a container
+    && find /etc/systemd/system /lib/systemd/system \
+        -path '*.wants/*' \
+        \( -name 'getty*' -o -name 'systemd-udevd*' -o -name 'systemd-firstboot*' \) \
+        -delete 2>/dev/null || true
+
+# Non-root test user; its user manager + session bus is what wsmr talks to.
+RUN useradd -m -s /bin/bash tester
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
