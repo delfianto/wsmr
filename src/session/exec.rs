@@ -1,8 +1,14 @@
-//! `aux exec`: fork the autoready watcher (double-fork to reparent it away from
-//! the compositor), then exec the compositor in the unit's cgroup. Ports the
-//! `aux exec` handler (`main.py:5066`). See `REFERENCE.md` §4.1/§5.
+//! `aux exec`: spawn the readiness watcher as an independent child, then exec
+//! the compositor in the unit's cgroup. Ports the `aux exec` handler
+//! (`main.py:5066`). See `REFERENCE.md` §4.1/§5.
 //!
-//! **Unsafe + Linux-runtime; unverified until the integration phase.**
+//! uwsm forks + double-forks the watcher. We **spawn** it instead: zbus's
+//! async-io reactor thread does not survive `fork()`, so a forked watcher's
+//! D-Bus connection is dead and never sends `READY=1` (found via the Tier-B
+//! integration test). A freshly spawned `wsmr aux readiness <id>` process gets a
+//! clean address space + its own reactor, and — being started before the
+//! compositor exec — lives in the same service cgroup, so its `systemd-notify`
+//! is accepted under `NotifyAccess=all`.
 
 use crate::comp::CompGlobals;
 use crate::env::files;
@@ -14,42 +20,24 @@ use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::time::Duration;
 
-/// Snapshot the activation env, fork the autoready watcher, then exec the
-/// compositor (replacing this process).
+/// Spawn the readiness watcher, then exec the compositor (replacing this
+/// process).
 pub fn aux_exec(comp: &CompGlobals) -> Result<()> {
-    let env_pre = SessionBus::connect()?.systemd_vars()?;
-
-    // SAFETY: fork from the main (single-threaded enough) flow; the child does
-    // minimal work then either execs or _exits. The leaf reconnects D-Bus fresh
-    // rather than touching parent state.
-    match unsafe { nix::unistd::fork() }.map_err(fork_err)? {
-        nix::unistd::ForkResult::Parent { child } => {
-            // reap the intermediate fork, then fall through to exec the compositor
-            let _ = nix::sys::wait::waitpid(child, None);
-        }
-        nix::unistd::ForkResult::Child => {
-            // intermediate: fork again so the leaf is reparented to init
-            // SAFETY: as above; every arm diverges (_exit) — never returns.
-            match unsafe { nix::unistd::fork() } {
-                Ok(nix::unistd::ForkResult::Parent { .. }) => unsafe { libc::_exit(0) },
-                Ok(nix::unistd::ForkResult::Child) => {
-                    if let Err(e) = watcher(comp, &env_pre) {
-                        eprintln!("autoready watcher failed: {e}");
-                    }
-                    unsafe { libc::_exit(0) }
-                }
-                Err(_) => unsafe { libc::_exit(1) },
-            }
-        }
-    }
-
+    let self_exe = std::env::current_exe().map_err(|e| Error::io("current_exe", e))?;
+    // independent child in our cgroup; inherits $NOTIFY_SOCKET for systemd-notify
+    Command::new(&self_exe)
+        .args(["aux", "readiness", &comp.id])
+        .spawn()
+        .map_err(|e| Error::io("spawn readiness watcher", e))?;
     exec_compositor(&comp.cmdline)
 }
 
-/// The autoready watcher: wait for the expected vars, sync the delta, then
-/// `exec systemd-notify` to declare readiness. Returns only on error.
-fn watcher(comp: &CompGlobals, env_pre: &BTreeMap<String, String>) -> Result<()> {
+/// The readiness watcher (`aux readiness <id>`): snapshot the activation env,
+/// wait for the expected vars, sync the delta, then `exec systemd-notify` to
+/// declare readiness. Returns only on error.
+pub fn readiness_watch(comp: &CompGlobals) -> Result<()> {
     let bus = SessionBus::connect()?;
+    let env_pre = bus.systemd_vars()?;
     let unit = format!("wayland-wm@{}.service", comp.id_unit_string);
 
     let timeout = bus
@@ -108,8 +96,4 @@ fn exec_compositor(cmdline: &[String]) -> Result<()> {
 fn exec_systemd_notify(args: &[&str]) -> Error {
     let err = Command::new("systemd-notify").args(args).exec();
     Error::io("systemd-notify", err)
-}
-
-fn fork_err(e: nix::errno::Errno) -> Error {
-    Error::io("fork", std::io::Error::from_raw_os_error(e as i32))
 }
