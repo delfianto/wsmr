@@ -1,15 +1,15 @@
-//! wsmr binary entrypoint: parse the CLI and dispatch to `wsmr::session::*`.
+//! wsmr binary entrypoint: parse the CLI and dispatch.
 //!
-//! M3 wires `start`, `finalize`, and the `aux` actions (`prepare-env`,
-//! `cleanup-env`, `exec`, `waitpid`, `waitenv`) to real orchestration. Their
-//! Linux-runtime behavior is verified later (integration phase). `app`,
-//! `check`, and `aux app-daemon` remain `NotImplemented`.
+//! All subcommands are wired to real logic (`session::*`, `app::*`). Linux-only
+//! runtime paths are verified via the Podman integration harness. Deliberately
+//! deferred bits (e.g. desktop-entry *compositor* resolution) return
+//! `Error::NotImplemented`.
 
 use anyhow::Result;
 use clap::Parser;
 use wsmr::cli::{
-    AppArgs, AppUnitType as CliAppUnitType, AuxAction, AuxArgs, AuxIdArgs, CheckArgs, CheckCmd,
-    Cli, Command, FinalizeArgs, Rung as CliRung, Silence as CliSilence, StartArgs, StopArgs,
+    AppArgs, AuxAction, AuxArgs, AuxIdArgs, CheckArgs, CheckCmd, Cli, Command, FinalizeArgs,
+    Rung as CliRung, StartArgs, StopArgs,
 };
 use wsmr::comp::{CompGlobals, ResolveInput};
 use wsmr::error::{Error, Result as WResult};
@@ -66,30 +66,12 @@ fn finalize(args: FinalizeArgs) -> WResult<()> {
             .map(String::from),
     );
     session::finalize::finalize(&vars)
+        .inspect_err(|e| session::notify_error("wsmr: finalize failed", &e.to_string()))
 }
 
 fn app(args: AppArgs) -> WResult<()> {
-    use wsmr::app::launch::{self, AppOpts, Silence, UnitType};
-    let unit_type = match args.app_unit_type {
-        CliAppUnitType::Scope => UnitType::Scope,
-        CliAppUnitType::Service => UnitType::Service,
-    };
-    let silent = args.silent.map(|s| match s {
-        CliSilence::Out => Silence::Out,
-        CliSilence::Err => Silence::Err,
-        CliSilence::Both => Silence::Both,
-    });
-    launch::run(AppOpts {
-        cmdline: args.cmdline,
-        slice: args.slice_name,
-        unit_type,
-        terminal: args.terminal,
-        app_name: args.app_name,
-        unit_name: args.unit_name,
-        description: args.unit_description,
-        unit_properties: args.unit_properties,
-        silent,
-    })
+    wsmr::app::launch::run(args.into())
+        .inspect_err(|e| session::notify_error("wsmr: app launch failed", &e.to_string()))
 }
 
 fn check(args: CheckArgs) -> WResult<()> {
@@ -104,7 +86,37 @@ fn check(args: CheckArgs) -> WResult<()> {
             }
             Ok(())
         }
-        CheckCmd::MayStart(_) => Err(Error::todo("M6", "check may-start")),
+        CheckCmd::MayStart(a) => {
+            let vtnr = if a.vtnr.is_empty() {
+                vec![1]
+            } else {
+                a.vtnr.clone()
+            };
+            let verdict = session::check::check_may_start(&session::check::CheckOpts {
+                no_login: a.no_login,
+                vtnr,
+                allow_remote: a.allow_remote,
+                gst_seconds: a.gst_seconds,
+                verbose: a.verbose,
+            });
+            if verdict.may_start() {
+                if a.verbose {
+                    println!("May start compositor.");
+                }
+                return Ok(());
+            }
+            if !a.quiet {
+                let mut msgs = verdict.errors;
+                msgs.extend(verdict.visible);
+                if a.verbose {
+                    msgs.extend(verdict.silent);
+                }
+                for m in msgs {
+                    eprintln!("{m}");
+                }
+            }
+            std::process::exit(1);
+        }
     }
 }
 
@@ -127,7 +139,7 @@ fn aux(args: AuxArgs) -> WResult<()> {
             );
             session::wait::waitenv(&bus, &vars, session::wait::wait_timeout())
         }
-        AuxAction::AppDaemon => Err(Error::todo("M7", "app daemon")),
+        AuxAction::AppDaemon => wsmr::app::daemon::run(),
     }
 }
 

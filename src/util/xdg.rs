@@ -49,6 +49,26 @@ pub fn data_paths() -> Vec<PathBuf> {
     v
 }
 
+/// `$XDG_CONFIG_DIRS`, falling back to `/etc/xdg`.
+pub fn config_dirs() -> Vec<PathBuf> {
+    non_empty_var("XDG_CONFIG_DIRS")
+        .unwrap_or_else(|| "/etc/xdg".to_string())
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// Full config hierarchy in search order: `config_home` first, then `config_dirs`.
+pub fn config_paths() -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if let Ok(h) = config_home() {
+        v.push(h);
+    }
+    v.extend(config_dirs());
+    v
+}
+
 fn non_empty_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }

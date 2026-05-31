@@ -1,10 +1,15 @@
 //! `wsmr app`: resolve the target (desktop entry or bare command), expand its
-//! `Exec`, and launch it as a systemd scope/service in a slice via
-//! `systemd-run`. Ports `app()` (`main.py:3335`). Terminal launching (`-T`) and
-//! the app-daemon are deferred.
+//! `Exec`, optionally wrap it in a terminal, and launch it as a systemd
+//! scope/service in a slice via `systemd-run`. Ports `app()` (`main.py:3335`).
+//!
+//! [`resolve`] does all resolution and returns the final `systemd-run` argv(s)
+//! without executing — used both by [`run`] (which execs/spawns) and by the
+//! app-daemon (which emits shell). The app-daemon is the only reason resolution
+//! is split out.
 
 use crate::app::entry::DesktopEntry;
 use crate::app::field::{self, GenArgs};
+use crate::app::terminal::{self, TermOpts};
 use crate::app::{find, naming};
 use crate::comp::MainArg;
 use crate::error::{Error, Result};
@@ -59,7 +64,7 @@ pub enum Silence {
     Both,
 }
 
-/// Inputs to [`run`].
+/// Inputs to [`run`] / [`resolve`].
 pub struct AppOpts {
     /// Command (or entry id/path) + arguments.
     pub cmdline: Vec<String>,
@@ -67,7 +72,7 @@ pub struct AppOpts {
     pub slice: String,
     /// Unit type.
     pub unit_type: UnitType,
-    /// Launch in a terminal (deferred).
+    /// Launch in a terminal.
     pub terminal: bool,
     /// Explicit app name.
     pub app_name: Option<String>,
@@ -79,6 +84,30 @@ pub struct AppOpts {
     pub unit_properties: Vec<String>,
     /// Output to silence.
     pub silent: Option<Silence>,
+}
+
+impl From<crate::cli::AppArgs> for AppOpts {
+    fn from(a: crate::cli::AppArgs) -> Self {
+        use crate::cli::{AppUnitType, Silence as CliSilence};
+        AppOpts {
+            cmdline: a.cmdline,
+            slice: a.slice_name,
+            unit_type: match a.app_unit_type {
+                AppUnitType::Scope => UnitType::Scope,
+                AppUnitType::Service => UnitType::Service,
+            },
+            terminal: a.terminal,
+            app_name: a.app_name,
+            unit_name: a.unit_name,
+            description: a.unit_description,
+            unit_properties: a.unit_properties,
+            silent: a.silent.map(|s| match s {
+                CliSilence::Out => Silence::Out,
+                CliSilence::Err => Silence::Err,
+                CliSilence::Both => Silence::Both,
+            }),
+        }
+    }
 }
 
 /// Fully-resolved launch parameters fed to [`build_argv`].
@@ -142,8 +171,17 @@ pub fn build_argv(spec: &LaunchSpec) -> Vec<String> {
     a
 }
 
-/// Launch an application per `opts`.
-pub fn run(opts: AppOpts) -> Result<()> {
+struct Resolved {
+    cmdlines: Vec<Vec<String>>,
+    app_name: Option<String>,
+    description: Option<String>,
+    workdir: Option<String>,
+    properties: Vec<String>,
+    want_terminal: bool,
+}
+
+/// Resolve `opts` to the final `systemd-run` argv(s) — no execution.
+pub fn resolve(opts: &AppOpts) -> Result<Vec<Vec<String>>> {
     for p in &opts.unit_properties {
         if !p.contains('=') {
             return Err(Error::InvalidArg(format!(
@@ -151,25 +189,128 @@ pub fn run(opts: AppOpts) -> Result<()> {
             )));
         }
     }
-    if opts.terminal {
-        return Err(Error::todo("M5+", "terminal launching"));
-    }
-    let first = opts
-        .cmdline
-        .first()
-        .ok_or_else(|| Error::InvalidArg("no command given".into()))?;
-    let main = MainArg::parse(first)?;
 
+    let r = resolve_target(opts)?;
+    let mut cmdlines = r.cmdlines;
+
+    if r.want_terminal {
+        let (tcmd, exec_arg) = terminal::resolve_terminal(&TermOpts {
+            app_id: r.app_name.clone(),
+            title: r.description.clone(),
+            dir: r.workdir.clone(),
+            hold: false,
+        })?;
+        cmdlines = cmdlines
+            .into_iter()
+            .map(|c| {
+                let mut full = tcmd.clone();
+                if !c.is_empty() {
+                    full.extend(exec_arg.clone());
+                    full.extend(c);
+                }
+                full
+            })
+            .collect();
+    }
+
+    let slice = resolve_slice(&opts.slice)?;
+    let desktop = first_desktop();
+    let session_setenv = match opts.unit_type {
+        UnitType::Service => session_specific_env(),
+        UnitType::Scope => Vec::new(),
+    };
+    let multi = cmdlines.len() > 1;
+
+    let mut argvs = Vec::with_capacity(cmdlines.len());
+    for cmd in cmdlines {
+        let unit_name = if multi {
+            naming::auto_unit_name(
+                opts.unit_type.as_str(),
+                &desktop,
+                r.app_name.as_deref().unwrap_or(&cmd_name(&cmd)),
+                &random_hex8(),
+            )
+        } else {
+            resolve_unit_name(opts, &desktop, r.app_name.as_deref(), &cmd)?
+        };
+        let spec = LaunchSpec {
+            description: final_description(&r.description, r.app_name.as_deref(), &cmd),
+            cmdline: cmd,
+            slice: slice.clone(),
+            unit_type: opts.unit_type,
+            unit_name,
+            properties: r.properties.clone(),
+            silent: opts.silent,
+            workdir: r.workdir.clone(),
+            session_setenv: session_setenv.clone(),
+        };
+        argvs.push(build_argv(&spec));
+    }
+    Ok(argvs)
+}
+
+/// Launch an application per `opts` (single → exec; multi-instance → spawn+wait).
+pub fn run(opts: AppOpts) -> Result<()> {
+    let argvs = resolve(&opts)?;
+    if argvs.len() == 1 {
+        let argv = &argvs[0];
+        let mut command = configure(argv, opts.unit_type, opts.silent);
+        Err(Error::io(argv[0].clone(), command.exec()))
+    } else {
+        let mut children = Vec::new();
+        for argv in &argvs {
+            let child = configure(argv, opts.unit_type, opts.silent)
+                .spawn()
+                .map_err(|e| Error::io(argv[0].clone(), e))?;
+            children.push(child);
+        }
+        let mut all_ok = true;
+        for mut child in children {
+            match child.wait() {
+                Ok(s) if s.success() => {}
+                _ => all_ok = false,
+            }
+        }
+        if all_ok {
+            Ok(())
+        } else {
+            Err(Error::Resolve("one or more app instances failed".into()))
+        }
+    }
+}
+
+fn resolve_target(opts: &AppOpts) -> Result<Resolved> {
     let mut properties = opts.unit_properties.clone();
     let mut app_name = opts.app_name.clone();
     let mut description = opts.description.clone();
     let mut workdir: Option<String> = None;
 
+    // `app -T` with no command → launch the terminal itself
+    if opts.cmdline.is_empty() {
+        if !opts.terminal {
+            return Err(Error::InvalidArg("no command given".into()));
+        }
+        if app_name.is_none() {
+            app_name = Some("terminal".to_string());
+        }
+        return Ok(Resolved {
+            cmdlines: vec![vec![]],
+            app_name,
+            description,
+            workdir,
+            properties,
+            want_terminal: true,
+        });
+    }
+
+    let main = MainArg::parse(&opts.cmdline[0])?;
+    let mut want_terminal = opts.terminal;
+
     let cmdlines: Vec<Vec<String>> = if let Some(entry_id) = &main.entry_id {
         let entry = load_entry(&main, entry_id)?;
         entry.check_basic(main.entry_action.as_deref())?;
         if entry.terminal() {
-            return Err(Error::todo("M5+", "terminal launching"));
+            want_terminal = true;
         }
         properties.push(format!("SourcePath={}", entry.filename));
         workdir = entry
@@ -219,71 +360,14 @@ pub fn run(opts: AppOpts) -> Result<()> {
         vec![opts.cmdline.clone()]
     };
 
-    let slice = resolve_slice(&opts.slice)?;
-    let desktop = first_desktop();
-    let session_setenv = match opts.unit_type {
-        UnitType::Service => session_specific_env(),
-        UnitType::Scope => Vec::new(),
-    };
-
-    if cmdlines.len() == 1 {
-        // single instance → replace this process with systemd-run
-        let cmd = cmdlines.into_iter().next().unwrap();
-        let unit_name = resolve_unit_name(&opts, &desktop, app_name.as_deref(), &cmd)?;
-        let spec = LaunchSpec {
-            description: final_description(&description, app_name.as_deref(), &cmd),
-            cmdline: cmd,
-            slice,
-            unit_type: opts.unit_type,
-            unit_name,
-            properties,
-            silent: opts.silent,
-            workdir,
-            session_setenv,
-        };
-        let argv = build_argv(&spec);
-        let mut command = configure(&argv, opts.unit_type, opts.silent);
-        Err(Error::io(argv[0].clone(), command.exec()))
-    } else {
-        // multi-instance → spawn each, then wait
-        let mut children = Vec::new();
-        for cmd in cmdlines {
-            let unit_name = naming::auto_unit_name(
-                opts.unit_type.as_str(),
-                &desktop,
-                app_name.as_deref().unwrap_or(&basename(&cmd[0])),
-                &random_hex8(),
-            );
-            let spec = LaunchSpec {
-                description: final_description(&description, app_name.as_deref(), &cmd),
-                cmdline: cmd,
-                slice: slice.clone(),
-                unit_type: opts.unit_type,
-                unit_name,
-                properties: properties.clone(),
-                silent: opts.silent,
-                workdir: workdir.clone(),
-                session_setenv: session_setenv.clone(),
-            };
-            let argv = build_argv(&spec);
-            let child = configure(&argv, opts.unit_type, opts.silent)
-                .spawn()
-                .map_err(|e| Error::io(argv[0].clone(), e))?;
-            children.push(child);
-        }
-        let mut all_ok = true;
-        for mut child in children {
-            match child.wait() {
-                Ok(s) if s.success() => {}
-                _ => all_ok = false,
-            }
-        }
-        if all_ok {
-            Ok(())
-        } else {
-            Err(Error::Resolve("one or more app instances failed".into()))
-        }
-    }
+    Ok(Resolved {
+        cmdlines,
+        app_name,
+        description,
+        workdir,
+        properties,
+        want_terminal,
+    })
 }
 
 fn load_entry(main: &MainArg, entry_id: &str) -> Result<DesktopEntry> {
@@ -343,7 +427,7 @@ fn resolve_unit_name(
     }
     let name = app_name
         .map(str::to_string)
-        .unwrap_or_else(|| basename(&cmd[0]));
+        .unwrap_or_else(|| cmd_name(cmd));
     Ok(naming::auto_unit_name(
         opts.unit_type.as_str(),
         desktop,
@@ -365,7 +449,7 @@ fn resolve_slice(s: &str) -> Result<String> {
 fn final_description(desc: &Option<String>, app_name: Option<&str>, cmd: &[String]) -> String {
     desc.clone()
         .or_else(|| app_name.map(str::to_string))
-        .unwrap_or_else(|| basename(&cmd[0]))
+        .unwrap_or_else(|| cmd_name(cmd))
 }
 
 fn entry_description(entry: &DesktopEntry, action: Option<&str>) -> Option<String> {
@@ -417,8 +501,10 @@ fn first_desktop() -> String {
         .unwrap_or_else(|| "wsmr".to_string())
 }
 
-fn basename(p: &str) -> String {
-    p.rsplit('/').next().unwrap_or(p).to_string()
+fn cmd_name(cmd: &[String]) -> String {
+    cmd.first()
+        .map(|s| s.rsplit('/').next().unwrap_or(s).to_string())
+        .unwrap_or_else(|| "app".to_string())
 }
 
 fn random_hex8() -> String {
@@ -462,7 +548,6 @@ mod tests {
         assert!(a.contains(&"--unit=app-niri-firefox-deadbeef.scope".to_string()));
         assert!(a.contains(&"--property=SourcePath=/x/firefox.desktop".to_string()));
         assert!(a.contains(&"--same-dir".to_string()));
-        // scope does not inject --setenv
         assert!(!a.iter().any(|s| s.starts_with("--setenv=")));
         let dd = a.iter().position(|s| s == "--").unwrap();
         assert_eq!(&a[dd + 1..], &["firefox", "https://x"]);

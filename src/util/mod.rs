@@ -2,7 +2,19 @@
 
 pub mod xdg;
 
+use crate::error::{Error, Result};
 use std::path::{Path, PathBuf};
+
+/// Read the foreground VT number from `/sys/class/tty/tty0/active` (e.g. `tty1`
+/// → `1`). Linux-only at runtime. Shared by `prepare-env` and `check may-start`.
+pub fn read_fg_vt() -> Result<u32> {
+    let raw = std::fs::read_to_string("/sys/class/tty/tty0/active")
+        .map_err(|e| Error::io("/sys/class/tty/tty0/active", e))?;
+    raw.trim()
+        .strip_prefix("tty")
+        .and_then(|n| n.parse::<u32>().ok())
+        .ok_or_else(|| Error::Resolve(format!("unexpected foreground VT: {:?}", raw.trim())))
+}
 
 /// Resolve `cmd` to an executable path: if it contains `/`, check it directly;
 /// otherwise search `$PATH`. Returns `None` if not found / not executable.
