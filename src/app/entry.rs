@@ -96,6 +96,11 @@ impl DesktopEntry {
         split_list(self.get("Actions", None))
     }
 
+    /// `Categories=` entries.
+    pub fn categories(&self) -> Vec<String> {
+        split_list(self.get("Categories", None))
+    }
+
     /// Basic validity: not hidden, `TryExec` resolves, action exists, and the
     /// `Exec` command is on `$PATH`.
     pub fn check_basic(&self, action: Option<&str>) -> Result<()> {

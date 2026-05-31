@@ -152,6 +152,9 @@ pub trait LogindSession {
     /// Session leader PID.
     #[zbus(property)]
     fn leader(&self) -> zbus::Result<u32>;
+    /// Whether the session is remote (not local).
+    #[zbus(property, name = "Remote")]
+    fn remote(&self) -> zbus::Result<bool>;
 }
 
 #[proxy(
@@ -368,6 +371,11 @@ impl SystemBus {
     /// Leader PID of a login session.
     pub fn session_leader(&self, id: &str) -> Result<u32> {
         Ok(self.session(id)?.leader()?)
+    }
+
+    /// Whether a login session is remote.
+    pub fn session_remote(&self, id: &str) -> Result<bool> {
+        Ok(self.session(id)?.remote()?)
     }
 
     /// Find the login session on a given VT for the current user. Returns
