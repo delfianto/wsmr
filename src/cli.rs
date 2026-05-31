@@ -229,6 +229,18 @@ pub enum AuxAction {
 /// Arguments for `aux prepare-env` / `aux exec`.
 #[derive(Args, Debug)]
 pub struct AuxIdArgs {
+    /// Colon-separated desktop names (used by prepare-env).
+    #[arg(short = 'D', long = "desktop-names")]
+    pub desktop_names: Option<String>,
+    /// Treat `-D` names as exclusive.
+    #[arg(short = 'e', long = "exclusive")]
+    pub desktop_names_exclusive: bool,
+    /// Compositor display name.
+    #[arg(short = 'N', long = "name")]
+    pub wm_name: Option<String>,
+    /// Compositor description.
+    #[arg(short = 'C', long = "comment")]
+    pub wm_comment: Option<String>,
     /// Compositor id.
     #[arg(value_name = "WM_ID")]
     pub wm_id: String,

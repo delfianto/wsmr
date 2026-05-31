@@ -10,6 +10,8 @@
 use crate::error::Result;
 use crate::filter;
 use std::collections::{BTreeMap, HashMap};
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 use zbus::proxy;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue, Type};
 
@@ -109,6 +111,22 @@ pub trait SystemdUnit {
     /// Unit id (e.g. `dbus-broker.service`).
     #[zbus(property)]
     fn id(&self) -> zbus::Result<String>;
+    /// Active state (active/inactive/activating/…).
+    #[zbus(property, name = "ActiveState")]
+    fn active_state(&self) -> zbus::Result<String>;
+}
+
+#[proxy(
+    interface = "org.freedesktop.systemd1.Service",
+    default_service = "org.freedesktop.systemd1"
+)]
+pub trait SystemdService {
+    /// Who may send readiness notifications (`all`/`exec`/`main`/`none`).
+    #[zbus(property, name = "NotifyAccess")]
+    fn notify_access(&self) -> zbus::Result<String>;
+    /// Start timeout in microseconds.
+    #[zbus(property, name = "TimeoutStartUSec")]
+    fn timeout_start_usec(&self) -> zbus::Result<u64>;
 }
 
 #[proxy(
@@ -276,6 +294,41 @@ impl SessionBus {
             -1,
         )?)
     }
+
+    fn service(&self, unit: &str) -> Result<SystemdServiceProxyBlocking<'_>> {
+        let path = self.manager()?.get_unit(unit)?;
+        Ok(SystemdServiceProxyBlocking::builder(&self.conn)
+            .path(path)?
+            .build()?)
+    }
+
+    /// `NotifyAccess` of a service unit.
+    pub fn service_notify_access(&self, unit: &str) -> Result<String> {
+        Ok(self.service(unit)?.notify_access()?)
+    }
+
+    /// `TimeoutStartUSec` of a service unit (microseconds).
+    pub fn service_timeout_start_usec(&self, unit: &str) -> Result<u64> {
+        Ok(self.service(unit)?.timeout_start_usec()?)
+    }
+
+    /// Name of the active/activating `wayland-wm@*.service`, if any.
+    pub fn active_wm_unit(&self) -> Result<Option<String>> {
+        let units =
+            self.list_units_by_patterns(&["active", "activating"], &["wayland-wm@*.service"])?;
+        Ok(units.into_iter().next().map(|u| u.name))
+    }
+
+    /// Wait until the job queue no longer contains `job` (poll). Used after
+    /// `reload`/`stop_unit`.
+    pub fn wait_for_job(&self, job: &OwnedObjectPath) -> Result<()> {
+        loop {
+            if !self.list_jobs()?.iter().any(|j| &j.job_path == job) {
+                return Ok(());
+            }
+            sleep(Duration::from_millis(100));
+        }
+    }
 }
 
 /// Connection to the **system** bus with the logind surface.
@@ -315,5 +368,87 @@ impl SystemBus {
     /// Leader PID of a login session.
     pub fn session_leader(&self, id: &str) -> Result<u32> {
         Ok(self.session(id)?.leader()?)
+    }
+
+    /// Find the login session on a given VT for the current user. Returns
+    /// `(session_id, seat_id)`. Ports `get_session_by_vt` (`main.py:2592`).
+    pub fn session_by_vt(&self, vtnr: u32) -> Result<Option<(String, String)>> {
+        let uid = current_uid();
+        for s in self.list_sessions()? {
+            if s.uid != uid {
+                continue;
+            }
+            if let Ok(v) = self.session_vtnr(&s.session_id)
+                && v == vtnr
+            {
+                return Ok(Some((s.session_id, s.seat)));
+            }
+        }
+        Ok(None)
+    }
+
+    fn systemd(&self) -> Result<SystemdManagerProxyBlocking<'_>> {
+        Ok(SystemdManagerProxyBlocking::new(&self.conn)?)
+    }
+
+    fn unit_active_state(&self, unit: &str) -> Result<Option<String>> {
+        let path = match self.systemd()?.get_unit(unit) {
+            Ok(p) => p,
+            // unit not loaded yet → treat as not-active
+            Err(_) => return Ok(None),
+        };
+        let u = SystemdUnitProxyBlocking::builder(&self.conn)
+            .path(path)?
+            .build()?;
+        Ok(Some(u.active_state()?))
+    }
+
+    /// Poll the system `graphical.target` (or any unit) until its `ActiveState`
+    /// is in `states`, or `timeout` elapses. Ports the gst gate of `start`
+    /// (`main.py:4754`).
+    pub fn wait_for_unit(&self, unit: &str, states: &[&str], timeout: Duration) -> Result<bool> {
+        let start = Instant::now();
+        loop {
+            if let Some(state) = self.unit_active_state(unit)?
+                && states.contains(&state.as_str())
+            {
+                return Ok(true);
+            }
+            if start.elapsed() >= timeout {
+                return Ok(false);
+            }
+            sleep(Duration::from_millis(500));
+        }
+    }
+}
+
+/// Extract the compositor id from a `wayland-wm@<id>.service` unit name.
+/// Ports `extract_wm_id` (`main.py:1178`).
+pub fn extract_wm_id(unit: &str) -> Option<String> {
+    unit.strip_prefix("wayland-wm@")
+        .and_then(|s| s.strip_suffix(".service"))
+        .map(str::to_string)
+}
+
+// SAFETY: getuid() is always safe — it cannot fail and touches no memory.
+fn current_uid() -> u32 {
+    unsafe { libc::getuid() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_wm_id_parses() {
+        assert_eq!(
+            extract_wm_id("wayland-wm@sway.service").as_deref(),
+            Some("sway")
+        );
+        assert_eq!(
+            extract_wm_id("wayland-wm@my\\x2dcomp.service").as_deref(),
+            Some("my\\x2dcomp")
+        );
+        assert_eq!(extract_wm_id("other.service"), None);
     }
 }

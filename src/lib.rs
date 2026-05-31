@@ -8,8 +8,10 @@
 
 pub mod cli;
 pub mod comp;
+pub mod env;
 pub mod error;
 pub mod filter;
+pub mod session;
 pub mod sysd;
 pub mod units;
 pub mod util;
