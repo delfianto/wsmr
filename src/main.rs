@@ -80,6 +80,7 @@ fn aux(args: AuxArgs) -> WResult<()> {
         AuxAction::PrepareEnv(a) => session::prepare::prepare_env(&resolve_aux(&a)?),
         AuxAction::CleanupEnv => session::cleanup::cleanup_env(),
         AuxAction::Exec(a) => session::exec::aux_exec(&resolve_aux(&a)?),
+        AuxAction::Readiness(a) => session::exec::readiness_watch(&resolve_aux(&a)?),
         AuxAction::Waitpid(a) => session::wait::waitpid(a.pid),
         AuxAction::Waitenv(a) => {
             let bus = SessionBus::connect()?;
