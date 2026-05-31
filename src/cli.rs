@@ -198,12 +198,24 @@ pub struct IsActiveArgs {
 /// `check may-start` arguments.
 #[derive(Args, Debug)]
 pub struct MayStartArgs {
-    /// Verbose output.
+    /// Verbose output (report all failed checks).
     #[arg(short = 'v', long = "verbose")]
     pub verbose: bool,
     /// Suppress non-fatal output.
     #[arg(short = 'q', long = "quiet")]
     pub quiet: bool,
+    /// Skip the "in a login shell" check.
+    #[arg(short = 'l', long = "no-login")]
+    pub no_login: bool,
+    /// Allowed VT number(s) (default 1); use `0` to disable VT checks.
+    #[arg(long = "vtnr", value_delimiter = ',', num_args = 1..)]
+    pub vtnr: Vec<u32>,
+    /// Allow starting in a remote session.
+    #[arg(long = "allow-remote")]
+    pub allow_remote: bool,
+    /// Seconds to wait for the system graphical.target (0 = skip).
+    #[arg(long = "gst-seconds", default_value_t = 0)]
+    pub gst_seconds: u64,
 }
 
 /// `aux` arguments.
