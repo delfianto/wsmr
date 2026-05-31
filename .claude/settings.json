@@ -1,0 +1,51 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo nextest:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo doc:*)",
+      "Bash(cargo bench:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo add:*)",
+      "Bash(cargo remove:*)",
+      "Bash(cargo update:*)",
+      "Bash(cargo fix:*)",
+      "Bash(cargo clean:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(cargo expand:*)",
+      "Bash(rustc --version)",
+      "Bash(rustc --print:*)",
+      "Bash(rustup show:*)",
+      "Bash(rustup target list:*)",
+      "Bash(rustup which:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote -v)"
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath // empty' | { read -r f; case \"$f\" in *.rs) rustfmt --edition 2024 \"$f\" ;; esac; } 2>/dev/null || true",
+            "timeout": 30,
+            "statusMessage": "rustfmt"
+          }
+        ]
+      }
+    ]
+  }
+}
