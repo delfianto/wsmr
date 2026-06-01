@@ -129,9 +129,8 @@ fn build_dropins(comp: &CompGlobals, bin_path: &str) -> DropinInput {
         name: comp.name.clone(),
         description: comp.description.clone(),
         desktop_names: comp.desktop_names.clone(),
-        // TODO: thread the CLI -D / -e through CompGlobals to set these exactly
-        cli_desktop_names: comp.desktop_names.clone(),
-        cli_desktop_names_exclusive: false,
+        cli_desktop_names: comp.cli_desktop_names.clone(),
+        cli_desktop_names_exclusive: comp.cli_desktop_names_exclusive,
         cmdline: comp.cmdline.clone(),
         cli_args: comp.cmdline.iter().skip(1).cloned().collect(),
     }
@@ -185,6 +184,8 @@ mod tests {
             desktop_names: vec!["sway".into()],
             name: Some("Sway".into()),
             description: None,
+            cli_desktop_names: vec!["sway".into()],
+            cli_desktop_names_exclusive: true,
         };
         let d = build_dropins(&comp, "/usr/bin/wsmr");
         assert_eq!(d.id, "sway");
@@ -192,6 +193,8 @@ mod tests {
         assert_eq!(d.cmdline, vec!["/usr/bin/sway", "--unsupported-gpu"]);
         assert_eq!(d.cli_args, vec!["--unsupported-gpu"]);
         assert_eq!(d.desktop_names, vec!["sway"]);
-        assert!(!d.cli_desktop_names_exclusive);
+        // CLI -D/-e are threaded through verbatim (not approximated)
+        assert_eq!(d.cli_desktop_names, vec!["sway"]);
+        assert!(d.cli_desktop_names_exclusive);
     }
 }
