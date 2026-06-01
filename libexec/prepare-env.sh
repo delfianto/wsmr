@@ -1,4 +1,8 @@
 #!/bin/sh
+#
+# Adapted from uwsm (https://github.com/Vladimir-csp/uwsm),
+# uwsm-libexec/prepare-env.sh — Copyright (c) 2022 Vladimir-csp, MIT License.
+# See THIRD-PARTY-LICENSES at the repo root for the full notice.
 
 #### functions
 
