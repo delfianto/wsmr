@@ -12,7 +12,8 @@ use crate::app::find;
 use crate::comp::MainArg;
 use crate::error::{Error, Result};
 use crate::util::xdg;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 /// Per-launch terminal options (mapped to the entry's `TerminalArg*` keys).
 #[derive(Default)]
@@ -125,16 +126,101 @@ pub fn find_terminal_entry() -> Result<(DesktopEntry, Option<String>)> {
         }
     }
 
-    let found = find::find_first("applications", |id, e| {
-        !excluded.contains(id)
-            && is_terminal(e)
-            && e.check_basic(None).is_ok()
-            && e.check_showin().is_ok()
-    })?;
-
-    found
+    scan_for_terminal(&excluded)
         .map(|e| (e, None))
         .ok_or_else(|| Error::Resolve("could not find a terminal emulator".into()))
+}
+
+/// Scan `applications` for the first valid `TerminalEmulator`, consulting the
+/// not-terminals neg-cache (path→mtime) to skip entries already known not to be
+/// terminals without re-parsing them. Newly-rejected non-terminals are added and
+/// the cache is persisted. Best-effort: scan/cache IO errors are swallowed.
+fn scan_for_terminal(excluded: &HashSet<String>) -> Option<DesktopEntry> {
+    let mut cache = load_not_terminals();
+    let mut changed = false;
+    let mut found = None;
+    for (id, path) in find::list("applications") {
+        if excluded.contains(&id) {
+            continue;
+        }
+        let mtime = file_mtime(&path);
+        if cache.get(&path) == Some(&mtime) {
+            continue; // known not-a-terminal, unchanged → skip the parse
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(e) = DesktopEntry::parse(&path.to_string_lossy(), &content) else {
+            continue;
+        };
+        let is_term = is_terminal(&e);
+        if is_term && e.check_basic(None).is_ok() && e.check_showin().is_ok() {
+            found = Some(e);
+            break;
+        }
+        if !is_term {
+            // only true non-terminals are cached; a terminal that's merely
+            // invalid right now might become valid later.
+            cache.insert(path, mtime);
+            changed = true;
+        }
+    }
+    if changed {
+        save_not_terminals(&cache);
+    }
+    found
+}
+
+fn file_mtime(p: &Path) -> u64 {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn not_terminals_path() -> Option<PathBuf> {
+    xdg::cache_home()
+        .ok()
+        .map(|d| d.join("wsmr").join("not-terminals.list"))
+}
+
+/// Load the neg-cache as `path → mtime(secs)`. Line format: `<mtime> <path>`.
+fn load_not_terminals() -> HashMap<PathBuf, u64> {
+    let mut m = HashMap::new();
+    let Some(p) = not_terminals_path() else {
+        return m;
+    };
+    let Ok(content) = std::fs::read_to_string(&p) else {
+        return m;
+    };
+    for line in content.lines() {
+        if let Some((mt, path)) = line.split_once(' ')
+            && let Ok(mt) = mt.parse::<u64>()
+        {
+            m.insert(PathBuf::from(path), mt);
+        }
+    }
+    m
+}
+
+fn save_not_terminals(cache: &HashMap<PathBuf, u64>) {
+    let Some(p) = not_terminals_path() else {
+        return;
+    };
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut out = String::new();
+    for (path, mt) in cache {
+        let ps = path.to_string_lossy();
+        if ps.contains('\n') {
+            continue; // can't round-trip a newline in this line format
+        }
+        out.push_str(&format!("{mt} {ps}\n"));
+    }
+    let _ = std::fs::write(&p, out);
 }
 
 fn is_terminal(e: &DesktopEntry) -> bool {
@@ -350,6 +436,7 @@ mod tests {
                 ("XDG_DATA_DIRS", Some("")),
                 ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
                 ("XDG_CONFIG_DIRS", Some("")),
+                ("XDG_CACHE_HOME", Some(root.to_str().unwrap())),
                 ("XDG_CURRENT_DESKTOP", Some("stub")),
             ],
             || {
@@ -367,6 +454,7 @@ mod tests {
                 ("XDG_DATA_DIRS", Some("")),
                 ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
                 ("XDG_CONFIG_DIRS", Some("")),
+                ("XDG_CACHE_HOME", Some(root.to_str().unwrap())),
                 ("XDG_CURRENT_DESKTOP", Some("stub")),
             ],
             || assert!(find_terminal_entry().is_ok()),
@@ -380,10 +468,61 @@ mod tests {
                 ("XDG_DATA_DIRS", Some("")),
                 ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
                 ("XDG_CONFIG_DIRS", Some("")),
+                ("XDG_CACHE_HOME", Some(root.to_str().unwrap())),
                 ("XDG_CURRENT_DESKTOP", Some("stub")),
             ],
             || assert!(find_terminal_entry().is_err()),
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn neg_cache_records_non_terminals_and_finds_terminal() {
+        use crate::testutil::with_env;
+        let root = std::env::temp_dir().join(format!("wsmr-negcache-{}", std::process::id()));
+        let apps = root.join("applications");
+        std::fs::create_dir_all(&apps).unwrap();
+        let env = [
+            ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
+            ("XDG_DATA_DIRS", Some("")),
+            ("XDG_CONFIG_HOME", Some(root.to_str().unwrap())),
+            ("XDG_CONFIG_DIRS", Some("")),
+            ("XDG_CACHE_HOME", Some(root.to_str().unwrap())),
+            ("XDG_CURRENT_DESKTOP", Some("stub")),
+        ];
+
+        // Phase 1: only a non-terminal present → no terminal found, and the scan
+        // records it in the neg-cache (deterministic: nothing to break early on).
+        std::fs::write(
+            apps.join("editor.desktop"),
+            "[Desktop Entry]\nType=Application\nExec=sh\nCategories=Utility;TextEditor;\n",
+        )
+        .unwrap();
+        with_env(&env, || {
+            assert!(find_terminal_entry().is_err());
+            let cache = load_not_terminals();
+            assert!(
+                cache.keys().any(|p| p.ends_with("editor.desktop")),
+                "editor.desktop should be cached as a non-terminal: {cache:?}"
+            );
+        });
+
+        // Phase 2: add a real terminal → found; the cached non-terminal is skipped
+        // (cache hit) and the terminal is never cached as a non-terminal.
+        std::fs::write(
+            apps.join("myterm.desktop"),
+            "[Desktop Entry]\nType=Application\nExec=sh\nCategories=TerminalEmulator;\n",
+        )
+        .unwrap();
+        with_env(&env, || {
+            assert!(find_terminal_entry().is_ok());
+            let cache = load_not_terminals();
+            assert!(cache.keys().any(|p| p.ends_with("editor.desktop")));
+            assert!(
+                !cache.keys().any(|p| p.ends_with("myterm.desktop")),
+                "the terminal must not be cached as a non-terminal"
+            );
+        });
         let _ = std::fs::remove_dir_all(&root);
     }
 }

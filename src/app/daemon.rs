@@ -18,13 +18,63 @@ use crate::util::xdg;
 use clap::Parser;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicPtr, Ordering};
 
-/// Run the app-daemon loop (until a `stop` command).
+// Leaked CStrings of the two FIFO paths, set once at startup so the (async-
+// signal-safe) handler can unlink them on a termination signal.
+static IN_FIFO: AtomicPtr<libc::c_char> = AtomicPtr::new(std::ptr::null_mut());
+static OUT_FIFO: AtomicPtr<libc::c_char> = AtomicPtr::new(std::ptr::null_mut());
+
+extern "C" fn on_term_signal(_sig: libc::c_int) {
+    // SAFETY: a signal handler may only call async-signal-safe functions —
+    // `unlink` and `_exit` qualify. The pointers are set once at startup to
+    // leaked CStrings that are never freed, so they stay valid here.
+    unsafe {
+        let inp = IN_FIFO.load(Ordering::Relaxed);
+        if !inp.is_null() {
+            libc::unlink(inp as *const libc::c_char);
+        }
+        let outp = OUT_FIFO.load(Ordering::Relaxed);
+        if !outp.is_null() {
+            libc::unlink(outp as *const libc::c_char);
+        }
+        libc::_exit(0);
+    }
+}
+
+/// Trap SIGTERM/SIGINT/SIGHUP so the daemon removes its FIFOs and exits cleanly
+/// (systemd sends SIGTERM on stop). Best-effort; failures to register are
+/// non-fatal (the default disposition still terminates us).
+fn install_signal_handlers(in_path: &Path, out_path: &Path) {
+    if let Ok(c) = std::ffi::CString::new(in_path.as_os_str().as_bytes()) {
+        IN_FIFO.store(c.into_raw(), Ordering::Relaxed);
+    }
+    if let Ok(c) = std::ffi::CString::new(out_path.as_os_str().as_bytes()) {
+        OUT_FIFO.store(c.into_raw(), Ordering::Relaxed);
+    }
+    // SAFETY: registering a termination-signal handler whose body is
+    // async-signal-safe (see `on_term_signal`).
+    unsafe {
+        for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            libc::signal(sig, on_term_signal as *const () as libc::sighandler_t);
+        }
+    }
+}
+
+fn remove_fifos(in_path: &Path, out_path: &Path) {
+    let _ = std::fs::remove_file(in_path);
+    let _ = std::fs::remove_file(out_path);
+}
+
+/// Run the app-daemon loop (until a `stop` command or a termination signal).
 pub fn run() -> Result<()> {
     eprintln!("wsmr: launching app daemon");
+    let in_path = create_fifo("wsmr-app-daemon-in")?;
+    let out_path = create_fifo("wsmr-app-daemon-out")?;
+    install_signal_handlers(&in_path, &out_path);
     loop {
         let in_path = create_fifo("wsmr-app-daemon-in")?;
-        let _ = create_fifo("wsmr-app-daemon-out")?;
+        let out_path = create_fifo("wsmr-app-daemon-out")?;
 
         let line = std::fs::read_to_string(&in_path).map_err(|e| Error::io(&in_path, e))?;
         let args: Vec<String> = line
@@ -36,7 +86,10 @@ pub fn run() -> Result<()> {
         match args.first().map(String::as_str) {
             None => send("error 'No args given!' 2")?,
             Some("stop") => {
-                send("message 'Stopping app daemon.'")?;
+                // Don't write a reply: the out-FIFO write would block waiting for
+                // a reader the stopping client need not provide. Just clean up.
+                eprintln!("wsmr: app daemon stopping");
+                remove_fifos(&in_path, &out_path);
                 return Ok(());
             }
             Some("ping") => send("pong")?,

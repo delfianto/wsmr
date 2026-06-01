@@ -24,6 +24,7 @@ pub fn prepare_env(comp: &CompGlobals) -> Result<()> {
     let _ = std::fs::remove_file(&env_login_path);
 
     deduce_session(&mut env_login)?;
+    ensure_bindpid(&bus, &env_login);
 
     // current systemd activation env — saved for restore on cleanup
     let env_pre = bus.systemd_vars()?;
@@ -50,6 +51,42 @@ pub fn prepare_env(comp: &CompGlobals) -> Result<()> {
         bus.unset_systemd_vars(&names)?;
     }
     Ok(())
+}
+
+/// Best-effort: if no `wayland-session-bindpid@*.service` is active, bind the
+/// session to the logind **session-leader** PID. Normally `start` already
+/// started a bindpid unit on its own PID before exec-ing; this covers abnormal
+/// invocations where that didn't happen, so the session still dies with the
+/// login session. Failures are logged, never fatal. Ports the bindpid fallback
+/// in uwsm's `prepare_env`.
+fn ensure_bindpid(bus: &SessionBus, env: &BTreeMap<String, String>) {
+    match bus.list_units_by_patterns(
+        &["active", "activating"],
+        &["wayland-session-bindpid@*.service"],
+    ) {
+        Ok(units) if !units.is_empty() => return, // already bound
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("wsmr: could not check for a bindpid unit: {e}");
+            return;
+        }
+    }
+    let Some(sid) = env.get("XDG_SESSION_ID").filter(|v| !v.is_empty()) else {
+        eprintln!("wsmr: no XDG_SESSION_ID; skipping bindpid fallback");
+        return;
+    };
+    let leader = match SystemBus::connect().and_then(|b| b.session_leader(sid)) {
+        Ok(pid) => pid,
+        Err(e) => {
+            eprintln!("wsmr: could not determine session-leader PID: {e}");
+            return;
+        }
+    };
+    eprintln!("wsmr: no bindpid unit active; binding to session-leader PID {leader}");
+    let unit = format!("wayland-session-bindpid@{leader}.service");
+    let _ = Command::new("systemctl")
+        .args(["--user", "start", &unit])
+        .status();
 }
 
 /// Fill `XDG_VTNR`/`XDG_SESSION_ID`/`XDG_SEAT` if missing, via the foreground VT
@@ -259,6 +296,8 @@ mod tests {
             desktop_names: vec!["sway".into()],
             name: None,
             description: None,
+            cli_desktop_names: vec![],
+            cli_desktop_names_exclusive: false,
         };
         let aux = aux_vars(&comp, "deadbeef", true);
         assert!(aux.contains("__RANDOM_MARK__=deadbeef"));

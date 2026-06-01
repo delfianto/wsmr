@@ -4,6 +4,8 @@
 //! `fill_comp_globals` (`main.py:3965`/`:4292`). Desktop-entry compositor
 //! resolution is deferred to M3. See `docs/uwsm-core-analysis.md` §3.2/§6.
 
+use crate::app::entry::DesktopEntry;
+use crate::app::find;
 use crate::error::{Error, Result};
 use crate::units::escape::simple_systemd_escape;
 use std::collections::HashSet;
@@ -91,6 +93,11 @@ pub struct CompGlobals {
     pub name: Option<String>,
     /// Optional description.
     pub description: Option<String>,
+    /// Desktop names exactly as passed on the CLI via `-D` (recorded in the
+    /// drop-in so a regenerated unit re-passes them verbatim).
+    pub cli_desktop_names: Vec<String>,
+    /// Whether `-e` (exclusive desktop names) was set on the CLI.
+    pub cli_desktop_names_exclusive: bool,
 }
 
 /// Inputs to compositor resolution (the `start`-relevant subset for M0).
@@ -121,8 +128,8 @@ impl CompGlobals {
             .ok_or_else(|| Error::InvalidArg("no compositor command given".into()))?;
 
         let main = MainArg::parse(arg0)?;
-        if main.entry_id.is_some() {
-            return Err(Error::todo("M3", "desktop-entry compositor resolution"));
+        if let Some(entry_id) = main.entry_id.clone() {
+            return resolve_entry(input, &main, &entry_id);
         }
 
         let id = file_basename(arg0);
@@ -156,8 +163,89 @@ impl CompGlobals {
             desktop_names,
             name: input.name.clone(),
             description: input.description.clone(),
+            cli_desktop_names: input.desktop_names.clone(),
+            cli_desktop_names_exclusive: input.desktop_names_exclusive,
         })
     }
+}
+
+/// Resolve a **desktop-entry** compositor (`wsmr start <id>.desktop` or a path to
+/// one): load the entry from `wayland-sessions` (or the given path), take its
+/// `Exec` as the command line, and pull `DesktopNames`/`Name`/`Comment` as
+/// defaults (CLI `-D`/`-N`/`-C` still win). Mirrors uwsm's entry branch of
+/// `fill_comp_globals`.
+fn resolve_entry(input: &ResolveInput, main: &MainArg, entry_id: &str) -> Result<CompGlobals> {
+    let entry = match &main.path {
+        Some(p) => {
+            let content = std::fs::read_to_string(p).map_err(|e| Error::io(p, e))?;
+            DesktopEntry::parse(&p.to_string_lossy(), &content)?
+        }
+        None => find::find_entry("wayland-sessions", entry_id)?
+            .ok_or_else(|| Error::Resolve(format!("compositor entry not found: {entry_id}")))?,
+    };
+    let action = main.entry_action.as_deref();
+    entry.check_basic(action)?;
+
+    // command line = the entry's Exec, plus any args after the entry on the CLI
+    let mut cmdline = entry.exec(action)?;
+    cmdline.extend(input.wm_cmdline.iter().skip(1).cloned());
+
+    // id = the entry's filename stem (units become wayland-wm@<id>)
+    let id = entry_id.trim_end_matches(".desktop").to_string();
+    if !is_wm_id(&id) {
+        return Err(Error::Resolve(format!(
+            "\"{id}\" is not a valid compositor id"
+        )));
+    }
+    let id_unit_string = simple_systemd_escape(&id, false);
+    let bin_name = file_basename(cmdline.first().map(String::as_str).unwrap_or(&id));
+    let bin_id = sanitize_bin_id(&bin_name);
+
+    // desktop names: same merge as the bare case, but the entry's `DesktopNames`
+    // is an additional source (after XDG_CURRENT_DESKTOP + CLI `-D`).
+    let entry_dn: Vec<String> = entry
+        .get("DesktopNames", None)
+        .map(|s| {
+            s.split(';')
+                .filter(|x| !x.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut desktop_names: Vec<String> = Vec::new();
+    if input.desktop_names_exclusive {
+        desktop_names.extend(input.desktop_names.iter().cloned());
+    } else {
+        desktop_names.extend(input.xdg_current_desktop.iter().cloned());
+        desktop_names.extend(input.desktop_names.iter().cloned());
+        desktop_names.extend(entry_dn);
+        if desktop_names.is_empty() {
+            desktop_names.push(bin_name.clone());
+        }
+    }
+    dedup_preserving(&mut desktop_names);
+
+    let name = input
+        .name
+        .clone()
+        .or_else(|| entry.get_localized("Name", action));
+    let description = input
+        .description
+        .clone()
+        .or_else(|| entry.get_localized("Comment", action));
+
+    Ok(CompGlobals {
+        cmdline,
+        id,
+        id_unit_string,
+        bin_name,
+        bin_id,
+        desktop_names,
+        name,
+        description,
+        cli_desktop_names: input.desktop_names.clone(),
+        cli_desktop_names_exclusive: input.desktop_names_exclusive,
+    })
 }
 
 fn is_action_id(s: &str) -> bool {
@@ -305,15 +393,64 @@ mod tests {
     }
 
     #[test]
-    fn resolve_entry_is_not_implemented() {
+    fn resolve_entry_not_found_errors() {
+        // a bare entry id that isn't in any wayland-sessions dir → Resolve error
         let input = ResolveInput {
-            wm_cmdline: vec!["sway.desktop".into()],
+            wm_cmdline: vec!["wsmr-no-such-compositor.desktop".into()],
             ..Default::default()
         };
         assert!(matches!(
             CompGlobals::resolve(&input),
-            Err(Error::NotImplemented { .. })
+            Err(Error::Resolve(_))
         ));
+    }
+
+    #[test]
+    fn resolve_entry_by_path() {
+        // a path to a wayland-sessions entry is loaded directly
+        let dir = std::env::temp_dir().join(format!("wsmr-comp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mycomp.desktop");
+        std::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=My Comp\nComment=test wm\nExec=sh\nDesktopNames=mycomp;wlroots;\n",
+        )
+        .unwrap();
+        let input = ResolveInput {
+            wm_cmdline: vec![path.to_string_lossy().into_owned(), "--debug".into()],
+            xdg_current_desktop: vec!["X-Generic".into()],
+            ..Default::default()
+        };
+        let cg = CompGlobals::resolve(&input).unwrap();
+        assert_eq!(cg.id, "mycomp");
+        assert_eq!(cg.cmdline, vec!["sh", "--debug"]); // Exec + trailing CLI arg
+        assert_eq!(cg.bin_name, "sh");
+        assert_eq!(cg.name.as_deref(), Some("My Comp"));
+        assert_eq!(cg.description.as_deref(), Some("test wm"));
+        // XDG_CURRENT_DESKTOP, then the entry's DesktopNames
+        assert_eq!(cg.desktop_names, vec!["X-Generic", "mycomp", "wlroots"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_entry_cli_name_overrides() {
+        let dir = std::env::temp_dir().join(format!("wsmr-comp2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("c.desktop");
+        std::fs::write(&path, "[Desktop Entry]\nName=Entry Name\nExec=sh\n").unwrap();
+        let input = ResolveInput {
+            wm_cmdline: vec![path.to_string_lossy().into_owned()],
+            name: Some("CLI Name".into()),
+            desktop_names: vec!["only".into()],
+            desktop_names_exclusive: true,
+            xdg_current_desktop: vec!["ignored".into()],
+            ..Default::default()
+        };
+        let cg = CompGlobals::resolve(&input).unwrap();
+        assert_eq!(cg.name.as_deref(), Some("CLI Name")); // CLI -N wins
+        assert_eq!(cg.desktop_names, vec!["only"]); // exclusive → CLI only
+        assert!(cg.cli_desktop_names_exclusive);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

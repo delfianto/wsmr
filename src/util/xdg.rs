@@ -13,6 +13,15 @@ pub fn config_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".config"))
 }
 
+/// `$XDG_CACHE_HOME`, falling back to `$HOME/.cache`.
+pub fn cache_home() -> Result<PathBuf> {
+    if let Some(v) = non_empty_var("XDG_CACHE_HOME") {
+        return Ok(PathBuf::from(v));
+    }
+    let home = non_empty_var("HOME").ok_or_else(|| Error::EnvMissing("HOME".into()))?;
+    Ok(PathBuf::from(home).join(".cache"))
+}
+
 /// `$XDG_RUNTIME_DIR`. No portable fallback — it is always set inside a logind
 /// user session, which is the only place wsmr runs for real.
 pub fn runtime_dir() -> Result<PathBuf> {
@@ -95,6 +104,19 @@ mod tests {
         );
         with_env(&[("XDG_CONFIG_HOME", None), ("HOME", None)], || {
             assert!(config_home().is_err());
+        });
+    }
+
+    #[test]
+    fn cache_home_uses_var_then_home_fallback() {
+        with_env(&[("XDG_CACHE_HOME", Some("/cache"))], || {
+            assert_eq!(cache_home().unwrap(), PathBuf::from("/cache"));
+        });
+        with_env(&[("XDG_CACHE_HOME", None), ("HOME", Some("/h"))], || {
+            assert_eq!(cache_home().unwrap(), PathBuf::from("/h/.cache"));
+        });
+        with_env(&[("XDG_CACHE_HOME", None), ("HOME", None)], || {
+            assert!(cache_home().is_err());
         });
     }
 

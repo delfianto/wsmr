@@ -5,7 +5,7 @@
 use crate::app::entry::DesktopEntry;
 use crate::error::{Error, Result};
 use crate::util::xdg;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Find an entry by id (e.g. `firefox.desktop`) under `subpath`
 /// (e.g. `applications`). Returns the first match in data-dir order.
@@ -38,6 +38,43 @@ where
         }
     }
     Ok(None)
+}
+
+/// List `(id, path)` for every `.desktop` file under `subpath` across the data
+/// hierarchy, in search order, **without** reading or parsing them — for callers
+/// that filter on file metadata (e.g. the terminal neg-cache) before paying the
+/// parse.
+pub fn list(subpath: &str) -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for base in xdg::data_paths() {
+        let dir = base.join(subpath);
+        if dir.is_dir() {
+            collect(&dir, &dir, &mut out);
+        }
+    }
+    out
+}
+
+fn collect(base: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect(base, &path, out);
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
+            continue;
+        }
+        let id = path
+            .strip_prefix(base)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('/', "-");
+        out.push((id, path));
+    }
 }
 
 fn walk_pred<F>(base: &Path, dir: &Path, pred: &mut F) -> Result<Option<DesktopEntry>>

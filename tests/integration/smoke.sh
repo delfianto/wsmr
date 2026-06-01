@@ -109,11 +109,12 @@ case "$RESP" in
     "exec systemd-run --user --scope"*) ;;
     *) fail "app-daemon emitted unexpected line: '$RESP'" ;;
 esac
-# Terminate the daemon directly (sending `stop` would have it reply to the
-# out-FIFO, which blocks for a reader we don't provide here).
-kill "$DPID" 2>/dev/null || true
+# Clean shutdown: `stop` no longer writes to the out-FIFO (so it can't block on a
+# missing reader) — the daemon removes its FIFOs and exits 0.
+printf '%s\0' stop > "$RT/wsmr-app-daemon-in"
 wait "$DPID" 2>/dev/null || true
-echo "PASS: app-daemon answered ping and resolved an app command"
+[ ! -p "$RT/wsmr-app-daemon-in" ] || fail "app-daemon did not remove its in-FIFO on stop"
+echo "PASS: app-daemon answered ping, resolved an app command, and stopped cleanly"
 
 echo "== check may-start (should refuse: session active) =="
 if "$WSMR" check may-start --no-login --vtnr 0 --gst-seconds 0 -q; then
