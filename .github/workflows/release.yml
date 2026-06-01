@@ -1,0 +1,65 @@
+name: Release
+
+# Tag-triggered. Builds the optimized + stripped release binary (the
+# `[profile.release]` from Cargo.toml) for the common desktop-Linux targets and
+# attaches tarballs to a DRAFT GitHub Release for you to review and publish.
+#
+#   git tag -a v0.1.0 -m 'v0.1.0' && git push origin v0.1.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release + upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # glibc — normal desktop distros
+          - target: x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
+            apt: gcc-aarch64-linux-gnu
+            linker: aarch64-linux-gnu-gcc
+          # musl — fully static, drop-anywhere (pure-Rust crate, so this Just Works)
+          - target: x86_64-unknown-linux-musl
+            apt: musl-tools
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install cross/target deps
+        if: matrix.apt != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
+      - name: Build
+        env:
+          # only consulted for the aarch64 target; empty for the others
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          dist="wsmr-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$dist"
+          cp "target/${{ matrix.target }}/release/wsmr" "$dist/"
+          cp README.md LICENSE THIRD-PARTY-LICENSES "$dist/"
+          tar -czf "$dist.tar.gz" "$dist"
+          sha256sum "$dist.tar.gz" > "$dist.tar.gz.sha256"
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: |
+            wsmr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+            wsmr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256
