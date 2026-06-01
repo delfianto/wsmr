@@ -85,4 +85,27 @@ mod tests {
         assert!(n.starts_with("app-desk-x"));
         assert!(n.ends_with("@deadbeef.service"));
     }
+
+    #[test]
+    fn long_desktop_is_truncated_to_127_budget() {
+        // desktop longer than the 127-byte budget triggers desktop_sub truncation
+        let desk = "d".repeat(300);
+        let n = auto_unit_name("scope", &desk, "app", "deadbeef");
+        assert!(n.len() <= 255);
+        // the desktop segment got clipped well under its original length
+        let seg = n.trim_start_matches("app-");
+        assert!(seg.len() < 300);
+    }
+
+    #[test]
+    fn truncation_does_not_split_escape_token() {
+        // all '-' → each escapes to the 4-byte token "\x2d"; truncation must stop
+        // on a token boundary, never mid-token.
+        let name = "-".repeat(200);
+        let n = auto_unit_name("scope", "d", &name, "deadbeef");
+        assert!(n.len() <= 255);
+        // count backslashes vs the 'x' that follows each — every '\' has its 'x2d'
+        let cmd = &n["app-d-".len()..n.len() - "-deadbeef.scope".len()];
+        assert_eq!(cmd.matches("\\x2d").count() * 4, cmd.len());
+    }
 }

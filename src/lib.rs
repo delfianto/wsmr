@@ -9,11 +9,14 @@
 pub mod app;
 pub mod cli;
 pub mod comp;
+pub mod coverage;
 pub mod env;
 pub mod error;
 pub mod filter;
 pub mod session;
 pub mod sysd;
+#[cfg(test)]
+pub(crate) mod testutil;
 pub mod units;
 pub mod util;
 pub mod varnames;

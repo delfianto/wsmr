@@ -106,16 +106,17 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
         libc::dup2(2, 4);
     }
     let envelope = format!("wayland-session-envelope@{}.target", comp.id_unit_string);
-    let err = Command::new("systemd-cat")
-        .args([
-            "--identifier=wsmr",
-            "--stderr-priority=err",
-            "--",
-            "/bin/sh",
-        ])
-        .arg(&script)
-        .arg(&envelope)
-        .exec();
+    let mut cmd = Command::new("systemd-cat");
+    cmd.args([
+        "--identifier=wsmr",
+        "--stderr-priority=err",
+        "--",
+        "/bin/sh",
+    ])
+    .arg(&script)
+    .arg(&envelope);
+    crate::coverage::flush_before_exec();
+    let err = cmd.exec();
     Err(Error::io("systemd-cat", err))
 }
 
@@ -166,5 +167,31 @@ fn report(dir: &Path, outcome: &GenOutcome) {
         }
     } else {
         println!("  (unchanged)");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_dropins_maps_comp_fields() {
+        let comp = CompGlobals {
+            cmdline: vec!["/usr/bin/sway".into(), "--unsupported-gpu".into()],
+            id: "sway".into(),
+            id_unit_string: "sway".into(),
+            bin_name: "sway".into(),
+            bin_id: "sway".into(),
+            desktop_names: vec!["sway".into()],
+            name: Some("Sway".into()),
+            description: None,
+        };
+        let d = build_dropins(&comp, "/usr/bin/wsmr");
+        assert_eq!(d.id, "sway");
+        assert_eq!(d.bin_path, "/usr/bin/wsmr");
+        assert_eq!(d.cmdline, vec!["/usr/bin/sway", "--unsupported-gpu"]);
+        assert_eq!(d.cli_args, vec!["--unsupported-gpu"]);
+        assert_eq!(d.desktop_names, vec!["sway"]);
+        assert!(!d.cli_desktop_names_exclusive);
     }
 }

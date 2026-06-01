@@ -89,11 +89,17 @@ fn exec_compositor(cmdline: &[String]) -> Result<()> {
     let prog = cmdline
         .first()
         .ok_or_else(|| Error::InvalidArg("empty compositor command line".into()))?;
-    let err = Command::new(prog).args(&cmdline[1..]).exec();
+    let mut cmd = Command::new(prog);
+    cmd.args(&cmdline[1..]);
+    crate::coverage::flush_before_exec();
+    let err = cmd.exec();
     Err(Error::io(prog.clone(), err))
 }
 
 fn exec_systemd_notify(args: &[&str]) -> Error {
-    let err = Command::new("systemd-notify").args(args).exec();
+    let mut cmd = Command::new("systemd-notify");
+    cmd.args(args);
+    crate::coverage::flush_before_exec();
+    let err = cmd.exec();
     Error::io("systemd-notify", err)
 }

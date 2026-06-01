@@ -72,3 +72,133 @@ pub fn config_paths() -> Vec<PathBuf> {
 fn non_empty_var(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::with_env;
+    use std::path::PathBuf;
+
+    #[test]
+    fn config_home_uses_var_then_home_fallback() {
+        with_env(&[("XDG_CONFIG_HOME", Some("/cfg"))], || {
+            assert_eq!(config_home().unwrap(), PathBuf::from("/cfg"));
+        });
+        with_env(
+            &[("XDG_CONFIG_HOME", None), ("HOME", Some("/home/u"))],
+            || assert_eq!(config_home().unwrap(), PathBuf::from("/home/u/.config")),
+        );
+        // empty var is treated as unset
+        with_env(
+            &[("XDG_CONFIG_HOME", Some("")), ("HOME", Some("/home/u"))],
+            || assert_eq!(config_home().unwrap(), PathBuf::from("/home/u/.config")),
+        );
+        with_env(&[("XDG_CONFIG_HOME", None), ("HOME", None)], || {
+            assert!(config_home().is_err());
+        });
+    }
+
+    #[test]
+    fn runtime_dir_requires_var() {
+        with_env(&[("XDG_RUNTIME_DIR", Some("/run/user/1000"))], || {
+            assert_eq!(runtime_dir().unwrap(), PathBuf::from("/run/user/1000"));
+        });
+        with_env(&[("XDG_RUNTIME_DIR", None)], || {
+            assert!(runtime_dir().is_err());
+        });
+    }
+
+    #[test]
+    fn data_home_var_then_fallback() {
+        with_env(&[("XDG_DATA_HOME", Some("/data"))], || {
+            assert_eq!(data_home(), PathBuf::from("/data"));
+        });
+        with_env(&[("XDG_DATA_HOME", None), ("HOME", Some("/h"))], || {
+            assert_eq!(data_home(), PathBuf::from("/h/.local/share"))
+        });
+        with_env(&[("XDG_DATA_HOME", None), ("HOME", None)], || {
+            assert_eq!(data_home(), PathBuf::from(".local/share"));
+        });
+    }
+
+    #[test]
+    fn data_dirs_split_and_default() {
+        with_env(&[("XDG_DATA_DIRS", Some("/a:/b::/c"))], || {
+            assert_eq!(
+                data_dirs(),
+                vec![
+                    PathBuf::from("/a"),
+                    PathBuf::from("/b"),
+                    PathBuf::from("/c")
+                ]
+            );
+        });
+        with_env(&[("XDG_DATA_DIRS", None)], || {
+            assert_eq!(
+                data_dirs(),
+                vec![
+                    PathBuf::from("/usr/local/share"),
+                    PathBuf::from("/usr/share")
+                ]
+            );
+        });
+    }
+
+    #[test]
+    fn config_dirs_split_and_default() {
+        with_env(&[("XDG_CONFIG_DIRS", Some("/etc/xdg:/x"))], || {
+            assert_eq!(
+                config_dirs(),
+                vec![PathBuf::from("/etc/xdg"), PathBuf::from("/x")]
+            );
+        });
+        with_env(&[("XDG_CONFIG_DIRS", None)], || {
+            assert_eq!(config_dirs(), vec![PathBuf::from("/etc/xdg")]);
+        });
+    }
+
+    #[test]
+    fn data_paths_is_home_then_dirs() {
+        with_env(
+            &[
+                ("XDG_DATA_HOME", Some("/d")),
+                ("XDG_DATA_DIRS", Some("/x:/y")),
+            ],
+            || {
+                assert_eq!(
+                    data_paths(),
+                    vec![
+                        PathBuf::from("/d"),
+                        PathBuf::from("/x"),
+                        PathBuf::from("/y")
+                    ]
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn config_paths_is_home_then_dirs() {
+        with_env(
+            &[
+                ("XDG_CONFIG_HOME", Some("/c")),
+                ("XDG_CONFIG_DIRS", Some("/e")),
+            ],
+            || {
+                assert_eq!(
+                    config_paths(),
+                    vec![PathBuf::from("/c"), PathBuf::from("/e")]
+                );
+            },
+        );
+        // config_home failing (no HOME) → only config_dirs
+        with_env(
+            &[
+                ("XDG_CONFIG_HOME", None),
+                ("HOME", None),
+                ("XDG_CONFIG_DIRS", Some("/e")),
+            ],
+            || assert_eq!(config_paths(), vec![PathBuf::from("/e")]),
+        );
+    }
+}

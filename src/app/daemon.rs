@@ -130,4 +130,52 @@ mod tests {
     fn handle_app_rejects_bad_args() {
         assert!(handle_app(&["app".into(), "--bogus-flag".into()]).is_err());
     }
+
+    #[test]
+    fn handle_app_multi_instance_uses_wait() {
+        // a .desktop with %f + two files → multi-instance → "<a> & <b> & wait"
+        let dir = std::env::temp_dir().join(format!("wsmr-daemon-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v.desktop");
+        std::fs::write(&path, "[Desktop Entry]\nType=Application\nExec=sh %f\n").unwrap();
+        let out = handle_app(&[
+            "app".into(),
+            path.to_string_lossy().into_owned(),
+            "/etc/hostname".into(),
+            "/etc/hosts".into(),
+        ])
+        .unwrap();
+        assert!(out.ends_with(" & wait"), "got: {out}");
+        assert_eq!(out.matches(" & ").count(), 2, "two jobs + wait: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shquote_quotes_spaces() {
+        assert_eq!(shquote("a b"), "'a b'");
+        assert_eq!(shquote("plain"), "plain");
+    }
+
+    #[test]
+    fn create_fifo_makes_and_reuses_fifo() {
+        use crate::testutil::with_env;
+        let rt = std::env::temp_dir().join(format!("wsmr-fifo-{}", std::process::id()));
+        std::fs::create_dir_all(&rt).unwrap();
+        with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {
+            let p = create_fifo("test-fifo").unwrap();
+            assert!(is_fifo(&p));
+            // idempotent: a second call returns the same existing FIFO
+            let p2 = create_fifo("test-fifo").unwrap();
+            assert_eq!(p, p2);
+            assert!(is_fifo(&p2));
+
+            // a pre-existing *regular* file at the path is replaced with a FIFO
+            let plain = rt.join("plainfile");
+            std::fs::write(&plain, "x").unwrap();
+            assert!(!is_fifo(&plain));
+            let p3 = create_fifo("plainfile").unwrap();
+            assert!(is_fifo(&p3));
+        });
+        let _ = std::fs::remove_dir_all(&rt);
+    }
 }
