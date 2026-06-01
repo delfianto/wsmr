@@ -34,6 +34,12 @@ Consequences:
 
 ## Commands
 
+Prefer **`just <recipe>`** as the entry point (`justfile`; run `just` for the
+full list — `build`/`build-release`/`run`/`test`/`lint`/`coverage`/`integration`…).
+`build-release` is stripped + heavily optimized (fat LTO, 1 codegen unit,
+panic=abort); `build-native` adds `-C target-cpu=native` (fastest, non-portable).
+The raw equivalents:
+
 ```bash
 cargo check          # fast type-check (primary loop on macOS)
 cargo build          # debug build
