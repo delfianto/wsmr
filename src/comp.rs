@@ -326,6 +326,57 @@ mod tests {
     }
 
     #[test]
+    fn classify_entry_path_keeps_basename_id() {
+        let a = MainArg::parse("/apps/firefox.desktop").unwrap();
+        assert_eq!(a.entry_id.as_deref(), Some("firefox.desktop"));
+        assert_eq!(a.path, Some(PathBuf::from("/apps/firefox.desktop")));
+        // with an action
+        let b = MainArg::parse("/apps/firefox.desktop:new-window").unwrap();
+        assert_eq!(b.entry_id.as_deref(), Some("firefox.desktop"));
+        assert_eq!(b.entry_action.as_deref(), Some("new-window"));
+    }
+
+    #[test]
+    fn tilde_path_is_home_expanded() {
+        use crate::testutil::with_env;
+        with_env(&[("HOME", Some("/home/u"))], || {
+            let a = MainArg::parse("~/x/foo.desktop").unwrap();
+            assert_eq!(a.path, Some(PathBuf::from("/home/u/x/foo.desktop")));
+        });
+    }
+
+    #[test]
+    fn invalid_entry_id_rejected() {
+        // leading '-' is not a valid entry-id start
+        assert!(MainArg::parse("-bad.desktop").is_err());
+    }
+
+    #[test]
+    fn resolve_empty_cmdline_errors() {
+        assert!(CompGlobals::resolve(&ResolveInput::default()).is_err());
+    }
+
+    #[test]
+    fn resolve_invalid_id_errors() {
+        let input = ResolveInput {
+            wm_cmdline: vec!["sway!bang".into()],
+            ..Default::default()
+        };
+        assert!(matches!(
+            CompGlobals::resolve(&input),
+            Err(Error::Resolve(_))
+        ));
+    }
+
+    #[test]
+    fn is_entry_id_rules() {
+        assert!(is_entry_id("foo.desktop"));
+        assert!(is_entry_id("_x.desktop"));
+        assert!(!is_entry_id("nope")); // no suffix
+        assert!(!is_entry_id("-x.desktop")); // bad first char
+    }
+
+    #[test]
     fn exclusive_desktop_names() {
         let input = ResolveInput {
             wm_cmdline: vec!["sway".into()],

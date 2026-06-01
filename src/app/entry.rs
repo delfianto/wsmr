@@ -275,18 +275,109 @@ Exec=firefox --new-window
 
     #[test]
     fn showin_filtering() {
+        use crate::testutil::with_env;
         let e = entry(); // OnlyShowIn=GNOME;stub
-        // not in desktop → discarded
-        unsafe {
-            std::env::set_var("XDG_CURRENT_DESKTOP", "KDE");
-        }
-        assert!(e.check_showin().is_err());
-        unsafe {
-            std::env::set_var("XDG_CURRENT_DESKTOP", "stub:other");
-        }
-        assert!(e.check_showin().is_ok());
-        unsafe {
-            std::env::remove_var("XDG_CURRENT_DESKTOP");
-        }
+        with_env(&[("XDG_CURRENT_DESKTOP", Some("KDE"))], || {
+            assert!(e.check_showin().is_err()); // not in OnlyShowIn
+        });
+        with_env(&[("XDG_CURRENT_DESKTOP", Some("stub:other"))], || {
+            assert!(e.check_showin().is_ok());
+        });
+    }
+
+    #[test]
+    fn notshowin_filtering() {
+        let e = DesktopEntry::parse(
+            "/x/n.desktop",
+            "[Desktop Entry]\nExec=sh\nNotShowIn=KDE;stub;\n",
+        )
+        .unwrap();
+        use crate::testutil::with_env;
+        with_env(&[("XDG_CURRENT_DESKTOP", Some("stub"))], || {
+            assert!(e.check_showin().is_err()); // present in NotShowIn
+        });
+        with_env(&[("XDG_CURRENT_DESKTOP", Some("GNOME"))], || {
+            assert!(e.check_showin().is_ok());
+        });
+    }
+
+    #[test]
+    fn terminal_path_categories_accessors() {
+        let e = DesktopEntry::parse(
+            "/x/t.desktop",
+            "[Desktop Entry]\nExec=sh\nTerminal=true\nPath=/tmp\nCategories=Utility;TerminalEmulator;\n",
+        )
+        .unwrap();
+        assert!(e.terminal());
+        assert_eq!(e.path(), Some("/tmp"));
+        assert_eq!(e.categories(), vec!["Utility", "TerminalEmulator"]);
+        // empty Path → None
+        let e2 = DesktopEntry::parse("/x/p.desktop", "[Desktop Entry]\nExec=sh\nPath=\n").unwrap();
+        assert_eq!(e2.path(), None);
+    }
+
+    #[test]
+    fn tryexec_discards_when_missing() {
+        let e = DesktopEntry::parse(
+            "/x/tx.desktop",
+            "[Desktop Entry]\nExec=sh\nTryExec=definitely-not-real-bin-xyz\n",
+        )
+        .unwrap();
+        assert!(e.check_basic(None).is_err());
+        // TryExec that resolves passes
+        let ok = DesktopEntry::parse(
+            "/x/tx2.desktop",
+            "[Desktop Entry]\nExec=sh\nTryExec=/bin/sh\n",
+        )
+        .unwrap();
+        assert!(ok.check_basic(None).is_ok());
+    }
+
+    #[test]
+    fn unknown_action_rejected() {
+        // Exec=sh so the executable check passes; isolates the action check.
+        let e = DesktopEntry::parse(
+            "/x/a.desktop",
+            "[Desktop Entry]\nExec=sh\nActions=go;\n[Desktop Action go]\nExec=sh\n",
+        )
+        .unwrap();
+        assert!(e.check_basic(Some("no-such-action")).is_err());
+        assert!(e.check_basic(Some("go")).is_ok());
+    }
+
+    #[test]
+    fn localized_get_picks_locale_variant() {
+        use crate::testutil::with_env;
+        // Name[de] present in SAMPLE
+        let e = entry();
+        with_env(
+            &[
+                ("LC_ALL", None),
+                ("LC_MESSAGES", None),
+                ("LANG", Some("de_DE.UTF-8")),
+            ],
+            || assert_eq!(e.get_localized("Name", None).as_deref(), Some("Webbrowser")),
+        );
+        // C locale → unlocalized
+        with_env(
+            &[("LC_ALL", None), ("LC_MESSAGES", None), ("LANG", Some("C"))],
+            || {
+                assert_eq!(
+                    e.get_localized("Name", None).as_deref(),
+                    Some("Web Browser")
+                )
+            },
+        );
+    }
+
+    #[test]
+    fn locale_variants_expands() {
+        assert_eq!(
+            locale_variants("de_DE@euro"),
+            vec!["de_DE@euro", "de_DE", "de@euro", "de"]
+        );
+        // codeset is stripped (best-effort): everything after the first '.'
+        assert_eq!(locale_variants("de_DE.UTF-8"), vec!["de_DE", "de"]);
+        assert_eq!(locale_variants("fr"), vec!["fr"]);
     }
 }

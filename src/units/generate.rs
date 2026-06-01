@@ -258,4 +258,61 @@ mod tests {
         let td = TempDir::new();
         assert!(!remove_unit(td.path(), "nope.service").unwrap());
     }
+
+    fn dropin_input() -> DropinInput {
+        DropinInput {
+            id: "sway".into(),
+            id_unit_string: "sway".into(),
+            bin_path: "/usr/bin/wsmr".into(),
+            bin_name: "sway".into(),
+            desktop_names: vec!["sway".into()],
+            cmdline: vec!["/usr/bin/sway".into()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn rung_dir_resolves_per_rung() {
+        use crate::testutil::with_env;
+        with_env(&[("XDG_RUNTIME_DIR", Some("/run/user/1000"))], || {
+            assert_eq!(
+                rung_dir(Rung::Runtime).unwrap(),
+                PathBuf::from("/run/user/1000/systemd/user")
+            );
+        });
+        with_env(&[("XDG_CONFIG_HOME", Some("/home/u/.config"))], || {
+            assert_eq!(
+                rung_dir(Rung::Home).unwrap(),
+                PathBuf::from("/home/u/.config/systemd/user")
+            );
+        });
+    }
+
+    #[test]
+    fn generate_then_remove_all() {
+        let td = TempDir::new();
+        let out = generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        assert!(out.changed);
+        // graph + the per-compositor drop-in dir both exist
+        assert!(td.path().join("wayland-wm@.service").exists());
+        assert!(
+            td.path()
+                .join("wayland-wm@sway.service.d/50_custom.conf")
+                .exists()
+        );
+
+        let rm = remove_all(td.path()).unwrap();
+        assert!(rm.changed);
+        assert!(!td.path().join("wayland-wm@.service").exists());
+        assert!(!td.path().join("wayland-wm@sway.service.d").exists());
+        // removing again is a no-op
+        let rm2 = remove_all(td.path()).unwrap();
+        assert!(!rm2.changed);
+    }
+
+    #[test]
+    fn remove_all_missing_dir_is_noop() {
+        let missing = std::env::temp_dir().join(format!("wsmr-absent-{}", std::process::id()));
+        assert!(!remove_all(&missing).unwrap().changed);
+    }
 }

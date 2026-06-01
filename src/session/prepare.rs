@@ -213,6 +213,42 @@ mod tests {
     }
 
     #[test]
+    fn save_session_conf_writes_only_session_specific() {
+        use crate::testutil::with_env;
+        let rt = std::env::temp_dir().join(format!("wsmr-sconf-{}", std::process::id()));
+        std::fs::create_dir_all(rt.join("wsmr")).unwrap();
+        with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {
+            let mut env = BTreeMap::new();
+            env.insert("XDG_VTNR".to_string(), "1".to_string());
+            env.insert("XDG_SEAT".to_string(), "seat0".to_string());
+            env.insert("NOT_SESSION_VAR".to_string(), "x".to_string());
+            save_session_conf(&env).unwrap();
+            let conf = std::fs::read_to_string(rt.join("wsmr/env_session.conf")).unwrap();
+            assert!(conf.contains("XDG_VTNR=1"));
+            assert!(!conf.contains("NOT_SESSION_VAR"));
+        });
+        let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    #[test]
+    fn deduce_session_short_circuits_when_seat_and_id_present() {
+        let mut env = BTreeMap::new();
+        env.insert("XDG_SEAT".into(), "seat0".into());
+        env.insert("XDG_SESSION_ID".into(), "3".into());
+        // both present → returns Ok without touching the (absent) system bus
+        assert!(deduce_session(&mut env).is_ok());
+    }
+
+    #[test]
+    fn deduce_session_needs_logind_when_incomplete() {
+        // VT known but no seat/id → must reach logind; off a real seat/bus this
+        // surfaces an error rather than fabricating a session.
+        let mut env = BTreeMap::new();
+        env.insert("XDG_VTNR".into(), "1".into());
+        assert!(deduce_session(&mut env).is_err());
+    }
+
+    #[test]
     fn aux_vars_has_required_markers() {
         let comp = CompGlobals {
             cmdline: vec!["sway".into()],

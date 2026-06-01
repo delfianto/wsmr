@@ -61,3 +61,30 @@ impl Error {
         Error::NotImplemented { milestone, what }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_messages() {
+        let io = Error::io(
+            "/x/y",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+        );
+        assert!(io.to_string().starts_with("/x/y: "));
+        assert_eq!(
+            Error::EnvMissing("HOME".into()).to_string(),
+            "environment variable HOME is not set"
+        );
+        assert_eq!(Error::InvalidArg("bad".into()).to_string(), "bad");
+        assert_eq!(
+            Error::Resolve("comp".into()).to_string(),
+            "could not resolve comp"
+        );
+        assert_eq!(
+            Error::todo("M9", "warp drive").to_string(),
+            "warp drive is not implemented yet (M9)"
+        );
+    }
+}

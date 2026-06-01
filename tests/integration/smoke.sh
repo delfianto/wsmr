@@ -4,10 +4,55 @@
 # the whole lifecycle.
 set -uo pipefail
 
-WSMR=/opt/wsmr-target/debug/wsmr
-STUB=/opt/it/stub-compositor.sh
+# Overridable so the coverage harness can point us at an instrumented binary /
+# the source-tree stub (coverage-run.sh sets WSMR + STUB).
+WSMR="${WSMR:-/opt/wsmr-target/debug/wsmr}"
+STUB="${STUB:-/opt/it/stub-compositor.sh}"
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
+
+# Under the coverage harness LLVM_PROFILE_FILE is set; propagate it into the user
+# manager's activation environment so every unit-spawned wsmr process (prepare-
+# env, exec, readiness, waitpid, cleanup) is instrumented too. No-op otherwise.
+if [ -n "${LLVM_PROFILE_FILE:-}" ]; then
+    systemctl --user set-environment LLVM_PROFILE_FILE="$LLVM_PROFILE_FILE" 2>/dev/null || true
+fi
+
+# Desktop-entry + fake-terminal fixtures so the `app` entry/terminal resolution
+# paths are exercised (coverage is captured at resolve time, before exec, so
+# these need not actually succeed — hence `|| true` on the launches).
+APPS="$HOME/.local/share/applications"
+mkdir -p "$APPS"
+cat > "$APPS/wsmrtest.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=WSMR Test App
+GenericName=Tester
+Exec=sleep 1
+EOF
+cat > "$APPS/wsmrterm.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=WSMR Fake Terminal
+Exec=sh
+Categories=Utility;TerminalEmulator;
+TerminalArgExec=-e
+EOF
+cat > "$APPS/wsmrmulti.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=WSMR Multi
+Exec=sleep %f
+EOF
+
+# `check may-start` BEFORE any session is active: in verbose mode it walks every
+# precondition check (login-shell, VT, logind session VTNr/Remote, system
+# graphical.target) instead of short-circuiting — exercising session/check.rs and
+# the logind/system-bus probes in sysd/dbus.rs. Expected to "refuse" here.
+echo "== check may-start (pre-start, verbose: traverse all checks) =="
+"$WSMR" check may-start --verbose --vtnr 1 --gst-seconds 1 || true
+"$WSMR" check may-start --verbose --no-login --allow-remote --vtnr 0 || true
+echo "PASS: check may-start traversed pre-start checks"
 
 echo "== starting session =="
 "$WSMR" start "$STUB" >/tmp/wsmr-start.log 2>&1 &
@@ -35,6 +80,18 @@ APP_UNIT=$(systemctl --user list-units --no-legend 'app-*.service' 2>/dev/null |
 [ "$(systemctl --user show -p Slice --value "$APP_UNIT")" = app-graphical.slice ] \
     || fail "app unit not in app-graphical.slice"
 echo "PASS: app launched as $APP_UNIT in app-graphical.slice"
+
+# Exercise the remaining `app` resolution paths + `finalize` (coverage-oriented;
+# `|| true` since resolution coverage is flushed before the systemd-run exec).
+echo "== app: desktop-entry, terminal, and multi-instance resolution =="
+"$WSMR" app -t service -- wsmrtest.desktop || true          # by-id entry lookup
+"$WSMR" app -T -- true || true                              # terminal resolution
+"$WSMR" app -t service -- wsmrmulti.desktop /etc/hostname /etc/hosts || true  # multi-instance
+echo "PASS: exercised entry/terminal/multi app resolution"
+
+echo "== finalize (export vars + signal readiness, run as the compositor would) =="
+WAYLAND_DISPLAY=wayland-stub "$WSMR" finalize XDG_CURRENT_DESKTOP || true
+echo "PASS: finalize ran"
 
 echo "== app-daemon (FIFO ping/pong + app resolution) =="
 RT="/run/user/$(id -u)"

@@ -346,4 +346,72 @@ mod tests {
         assert_eq!(path2url("https://x/y"), "https://x/y");
         assert_eq!(path2url("/a/b"), "file:///a/b");
     }
+
+    #[test]
+    fn url_fields_single_and_multi() {
+        // %u single arg → converted to URL
+        let e = vec!["app".into(), "%u".into()];
+        assert_eq!(
+            gen_entry_args(&e, &["/a".into()], &ctx()).unwrap(),
+            GenArgs::Single(vec!["app".into(), "file:///a".into()])
+        );
+        // %u multi → one instance per arg
+        assert_eq!(
+            gen_entry_args(&e, &["/a".into(), "/b".into()], &ctx()).unwrap(),
+            GenArgs::Multi(vec![
+                vec!["app".into(), "file:///a".into()],
+                vec!["app".into(), "file:///b".into()],
+            ])
+        );
+        // %U packs all as URLs
+        let e = vec!["app".into(), "%U".into()];
+        assert_eq!(
+            gen_entry_args(&e, &["https://x".into(), "/b".into()], &ctx()).unwrap(),
+            GenArgs::Single(vec!["app".into(), "https://x".into(), "file:///b".into()])
+        );
+    }
+
+    #[test]
+    fn deprecated_fields_dropped_and_no_args() {
+        // %d is deprecated → dropped; with no caller args that's fine
+        let e = vec!["app".into(), "%d".into(), "tail".into()];
+        assert_eq!(
+            gen_entry_args(&e, &[], &ctx()).unwrap(),
+            GenArgs::Single(vec!["app".into(), "tail".into()])
+        );
+    }
+
+    #[test]
+    fn field_errors() {
+        // more than one % field in a single token
+        assert!(gen_entry_args(&["app".into(), "%f%u".into()], &[], &ctx()).is_err());
+        // %F embedded in an argument (not standalone)
+        assert!(gen_entry_args(&["app".into(), "x%F".into()], &[], &ctx()).is_err());
+        // %U embedded in an argument
+        assert!(gen_entry_args(&["app".into(), "x%U".into()], &[], &ctx()).is_err());
+        // conflicting file/url fields
+        assert!(
+            gen_entry_args(
+                &["app".into(), "%f".into(), "%u".into()],
+                &["/a".into()],
+                &ctx()
+            )
+            .is_err()
+        );
+        // empty Exec
+        assert!(gen_entry_args(&[], &[], &ctx()).is_err());
+    }
+
+    #[test]
+    fn icon_omitted_when_empty() {
+        let c = EntryCtx {
+            name: "n",
+            icon: "",
+            filename: "/x",
+        };
+        assert_eq!(
+            gen_entry_args(&["app".into(), "%i".into()], &[], &c).unwrap(),
+            GenArgs::Single(vec!["app".into()])
+        );
+    }
 }
