@@ -167,37 +167,49 @@ fn read_terminal_lists() -> (Vec<(String, Option<String>)>, HashSet<String>) {
             let Ok(content) = std::fs::read_to_string(dir.join(f)) else {
                 continue;
             };
-            for line in content.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-                let (fb, rest) = match line.strip_prefix('-') {
-                    Some(r) => (-1i8, r),
-                    None => match line.strip_prefix('+') {
-                        Some(r) => (1, r),
-                        None => (0, line),
-                    },
-                };
-                let (id, action) = parse_entry_ref(rest);
-                let Some(id) = id else { continue };
-                match fb {
-                    0 if !explicit.iter().any(|(i, a)| i == &id && a == &action) => {
-                        explicit.push((id, action));
-                    }
-                    -1 if action.is_none() && !protected.contains(&id) => {
-                        excluded.insert(id);
-                    }
-                    1 if action.is_none() => {
-                        protected.insert(id.clone());
-                        excluded.remove(&id);
-                    }
-                    _ => {}
-                }
-            }
+            parse_terminal_list(&content, &mut explicit, &mut excluded, &mut protected);
         }
     }
     (explicit, excluded)
+}
+
+/// Apply one `xdg-terminals.list` file's lines to the running preference state.
+/// `+id` protects/un-excludes, `-id` excludes, a bare `id` appends to the
+/// preference list; `#` lines and blanks are ignored. Pure (no I/O).
+fn parse_terminal_list(
+    content: &str,
+    explicit: &mut Vec<(String, Option<String>)>,
+    excluded: &mut HashSet<String>,
+    protected: &mut HashSet<String>,
+) {
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (fb, rest) = match line.strip_prefix('-') {
+            Some(r) => (-1i8, r),
+            None => match line.strip_prefix('+') {
+                Some(r) => (1, r),
+                None => (0, line),
+            },
+        };
+        let (id, action) = parse_entry_ref(rest);
+        let Some(id) = id else { continue };
+        match fb {
+            0 if !explicit.iter().any(|(i, a)| i == &id && a == &action) => {
+                explicit.push((id, action));
+            }
+            -1 if action.is_none() && !protected.contains(&id) => {
+                excluded.insert(id);
+            }
+            1 if action.is_none() => {
+                protected.insert(id.clone());
+                excluded.remove(&id);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn parse_entry_ref(s: &str) -> (Option<String>, Option<String>) {
@@ -250,5 +262,128 @@ mod tests {
         };
         let (cmd, _) = build_terminal(&e, None, &opts).unwrap();
         assert!(cmd.contains(&"--hold".to_string()));
+    }
+
+    #[test]
+    fn custom_exec_arg() {
+        let e = term_entry("TerminalArgExec=--command\n");
+        let (_, exec_arg) = build_terminal(&e, None, &TermOpts::default()).unwrap();
+        assert_eq!(exec_arg, vec!["--command"]);
+        // empty key values are treated as absent → default "-e"
+        let e = term_entry("TerminalArgExec=\nX-ExecArg=\n");
+        let (_, exec_arg) = build_terminal(&e, None, &TermOpts::default()).unwrap();
+        assert_eq!(exec_arg, vec!["-e"]);
+    }
+
+    #[test]
+    fn dir_option_and_no_hold_key() {
+        let e = term_entry("TerminalArgDir=--working-directory=\n");
+        let opts = TermOpts {
+            dir: Some("/tmp".into()),
+            hold: true, // no TerminalArgHold key → nothing appended
+            ..Default::default()
+        };
+        let (cmd, _) = build_terminal(&e, None, &opts).unwrap();
+        assert!(cmd.contains(&"--working-directory=/tmp".to_string()));
+    }
+
+    #[test]
+    fn is_terminal_checks_category() {
+        assert!(is_terminal(&term_entry("")));
+        let not = DesktopEntry::parse(
+            "/x/x.desktop",
+            "[Desktop Entry]\nExec=x\nCategories=Utility;\n",
+        )
+        .unwrap();
+        assert!(!is_terminal(&not));
+    }
+
+    #[test]
+    fn parse_list_fallback_prefixes() {
+        let mut explicit = Vec::new();
+        let mut excluded = HashSet::new();
+        let mut protected = HashSet::new();
+        parse_terminal_list(
+            "# comment\n\nfoo.desktop\n-bar.desktop\nfoo.desktop\n",
+            &mut explicit,
+            &mut excluded,
+            &mut protected,
+        );
+        // bare id appended once (dup ignored); '-' excludes
+        assert_eq!(explicit, vec![("foo.desktop".to_string(), None)]);
+        assert!(excluded.contains("bar.desktop"));
+
+        // '+' protects so a later '-' cannot exclude it
+        let mut explicit = Vec::new();
+        let mut excluded = HashSet::new();
+        let mut protected = HashSet::new();
+        parse_terminal_list(
+            "+keep.desktop\n-keep.desktop\n",
+            &mut explicit,
+            &mut excluded,
+            &mut protected,
+        );
+        assert!(protected.contains("keep.desktop"));
+        assert!(!excluded.contains("keep.desktop"));
+    }
+
+    #[test]
+    fn find_terminal_entry_from_list_and_scan() {
+        use crate::testutil::with_env;
+        let root = std::env::temp_dir().join(format!("wsmr-term-{}", std::process::id()));
+        let apps = root.join("applications");
+        std::fs::create_dir_all(&apps).unwrap();
+        // a terminal whose Exec is on PATH (`sh`) so check_basic passes
+        std::fs::write(
+            apps.join("myterm.desktop"),
+            "[Desktop Entry]\nType=Application\nExec=sh\nCategories=TerminalEmulator;\n",
+        )
+        .unwrap();
+        // explicit preference file
+        let cfg = root.join("config");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join("xdg-terminals.list"), "myterm.desktop\n").unwrap();
+
+        with_env(
+            &[
+                ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
+                ("XDG_DATA_DIRS", Some("")),
+                ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
+                ("XDG_CONFIG_DIRS", Some("")),
+                ("XDG_CURRENT_DESKTOP", Some("stub")),
+            ],
+            || {
+                let (e, action) = find_terminal_entry().unwrap();
+                assert!(is_terminal(&e));
+                assert!(action.is_none());
+            },
+        );
+
+        // remove the list → falls back to category scan, still finds myterm
+        std::fs::remove_file(cfg.join("xdg-terminals.list")).unwrap();
+        with_env(
+            &[
+                ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
+                ("XDG_DATA_DIRS", Some("")),
+                ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
+                ("XDG_CONFIG_DIRS", Some("")),
+                ("XDG_CURRENT_DESKTOP", Some("stub")),
+            ],
+            || assert!(find_terminal_entry().is_ok()),
+        );
+
+        // no terminals anywhere → error
+        std::fs::remove_file(apps.join("myterm.desktop")).unwrap();
+        with_env(
+            &[
+                ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
+                ("XDG_DATA_DIRS", Some("")),
+                ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
+                ("XDG_CONFIG_DIRS", Some("")),
+                ("XDG_CURRENT_DESKTOP", Some("stub")),
+            ],
+            || assert!(find_terminal_entry().is_err()),
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -255,6 +255,7 @@ pub fn run(opts: AppOpts) -> Result<()> {
     if argvs.len() == 1 {
         let argv = &argvs[0];
         let mut command = configure(argv, opts.unit_type, opts.silent);
+        crate::coverage::flush_before_exec();
         Err(Error::io(argv[0].clone(), command.exec()))
     } else {
         let mut children = Vec::new();
@@ -570,6 +571,162 @@ mod tests {
         let a = build_argv(&s);
         assert!(a.contains(&"--working-directory=/tmp".to_string()));
         assert!(!a.contains(&"--same-dir".to_string()));
+    }
+
+    fn opts(cmdline: Vec<&str>) -> AppOpts {
+        AppOpts {
+            cmdline: cmdline.into_iter().map(String::from).collect(),
+            slice: "a".into(),
+            unit_type: UnitType::Scope,
+            terminal: false,
+            app_name: None,
+            unit_name: None,
+            description: None,
+            unit_properties: vec![],
+            silent: None,
+        }
+    }
+
+    /// Argv following the `--` separator.
+    fn app_cmd(argv: &[String]) -> &[String] {
+        let dd = argv.iter().position(|s| s == "--").unwrap();
+        &argv[dd + 1..]
+    }
+
+    #[test]
+    fn resolve_bare_executable_scope() {
+        // `sh` is on PATH everywhere
+        let argvs = resolve(&opts(vec!["sh", "-c", "true"])).unwrap();
+        assert_eq!(argvs.len(), 1);
+        assert_eq!(app_cmd(&argvs[0]), &["sh", "-c", "true"]);
+        assert!(argvs[0].contains(&"--scope".to_string()));
+        assert!(argvs[0].contains(&"--slice=app-graphical.slice".to_string()));
+    }
+
+    #[test]
+    fn resolve_bare_service_has_setenv_from_session() {
+        use crate::testutil::with_env;
+        let mut o = opts(vec!["sh"]);
+        o.unit_type = UnitType::Service;
+        with_env(&[("XDG_VTNR", Some("2"))], || {
+            let argvs = resolve(&o).unwrap();
+            assert!(argvs[0].contains(&"--setenv=XDG_VTNR=2".to_string()));
+            assert!(argvs[0].contains(&"--property=Type=exec".to_string()));
+        });
+    }
+
+    #[test]
+    fn resolve_command_not_found_errors() {
+        assert!(resolve(&opts(vec!["wsmr-no-such-cmd-zzz"])).is_err());
+    }
+
+    #[test]
+    fn resolve_bad_property_errors() {
+        let mut o = opts(vec!["sh"]);
+        o.unit_properties = vec!["NOEQUALS".into()];
+        assert!(resolve(&o).is_err());
+    }
+
+    #[test]
+    fn resolve_desktop_entry_by_path() {
+        // a path ending in .desktop is parsed directly (no XDG lookup)
+        let dir = std::env::temp_dir().join(format!("wsmr-launch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("editor.desktop");
+        std::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=Editor\nExec=sh %f\n",
+        )
+        .unwrap();
+        let argvs = resolve(&opts(vec![path.to_str().unwrap(), "/etc/hostname"])).unwrap();
+        assert_eq!(argvs.len(), 1);
+        assert_eq!(app_cmd(&argvs[0]), &["sh", "/etc/hostname"]);
+        assert!(
+            argvs[0]
+                .iter()
+                .any(|s| s.starts_with("--property=SourcePath="))
+        );
+        assert!(argvs[0].iter().any(|s| s.starts_with("--description=")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_desktop_entry_multi_instance() {
+        let dir = std::env::temp_dir().join(format!("wsmr-launchm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("viewer.desktop");
+        std::fs::write(&path, "[Desktop Entry]\nType=Application\nExec=sh %f\n").unwrap();
+        // two file args + a single-valued %f → one unit per file
+        let argvs = resolve(&opts(vec![
+            path.to_str().unwrap(),
+            "/etc/hostname",
+            "/etc/hosts",
+        ]))
+        .unwrap();
+        assert_eq!(argvs.len(), 2);
+        assert_eq!(app_cmd(&argvs[0]), &["sh", "/etc/hostname"]);
+        assert_eq!(app_cmd(&argvs[1]), &["sh", "/etc/hosts"]);
+        // distinct auto unit names
+        let u0 = argvs[0].iter().find(|s| s.starts_with("--unit="));
+        let u1 = argvs[1].iter().find(|s| s.starts_with("--unit="));
+        assert_ne!(u0, u1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn explicit_unit_name_validated() {
+        let mut o = opts(vec!["sh"]);
+        o.unit_name = Some("custom.scope".into());
+        assert_eq!(
+            resolve(&o).unwrap()[0]
+                .iter()
+                .find(|s| s.starts_with("--unit=")),
+            Some(&"--unit=custom.scope".to_string())
+        );
+        // wrong suffix
+        let mut o = opts(vec!["sh"]);
+        o.unit_name = Some("custom.service".into()); // but unit_type=Scope
+        assert!(resolve(&o).is_err());
+    }
+
+    #[test]
+    fn pure_helpers() {
+        assert_eq!(cmd_name(&["/usr/bin/foo".into()]), "foo");
+        assert_eq!(cmd_name(&[]), "app");
+        assert_eq!(
+            final_description(&Some("D".into()), Some("an"), &["c".into()]),
+            "D"
+        );
+        assert_eq!(final_description(&None, Some("an"), &["c".into()]), "an");
+        assert_eq!(final_description(&None, None, &["/x/c".into()]), "c");
+    }
+
+    #[test]
+    fn first_desktop_from_env() {
+        use crate::testutil::with_env;
+        with_env(&[("XDG_CURRENT_DESKTOP", Some("niri:wlroots"))], || {
+            assert_eq!(first_desktop(), "niri");
+        });
+        with_env(&[("XDG_CURRENT_DESKTOP", None)], || {
+            assert_eq!(first_desktop(), "wsmr");
+        });
+    }
+
+    #[test]
+    fn configure_strips_desktop_entry_vars() {
+        let c = configure(&["systemd-run".into(), "x".into()], UnitType::Scope, None);
+        let envs: std::collections::HashMap<_, _> = c.get_envs().collect();
+        // env_remove records a None override for each DESKTOP_ENTRY_* var
+        assert!(envs.contains_key(std::ffi::OsStr::new("DESKTOP_ENTRY_ID")));
+        assert!(envs[std::ffi::OsStr::new("DESKTOP_ENTRY_ID")].is_none());
+    }
+
+    #[test]
+    fn terminal_only_no_command_errors_without_terminal_flag() {
+        // empty cmdline + not terminal → error
+        let mut o = opts(vec![]);
+        o.terminal = false;
+        assert!(resolve(&o).is_err());
     }
 
     #[test]

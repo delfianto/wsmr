@@ -42,3 +42,27 @@ jobs:
           sudo apt-get install -y podman
       - name: Run integration harness
         run: ./scripts/linux-integration.sh
+
+  # Merged code coverage: one instrumented Linux build, exercised by BOTH the
+  # unit tests and the Tier-B systemd integration smoke, reported together and
+  # gated at >= 90% lines. Runs entirely inside the coverage container (so the
+  # unit + integration profiles come from the same binary; see
+  # tests/integration/coverage-run.sh). Best-effort, like `integration`.
+  coverage:
+    name: merged coverage (>= 90% lines)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+      - name: Run merged coverage + enforce gate
+        run: ./scripts/coverage.sh merged
+      - name: Upload lcov report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: ignore

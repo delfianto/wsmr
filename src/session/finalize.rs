@@ -55,6 +55,9 @@ pub fn finalize(extra_vars: &[String]) -> Result<()> {
 
 /// `exec systemd-notify <args>`. Only returns (an error) if exec fails.
 fn exec_systemd_notify(args: &[&str]) -> Error {
-    let err = Command::new("systemd-notify").args(args).exec();
+    let mut cmd = Command::new("systemd-notify");
+    cmd.args(args);
+    crate::coverage::flush_before_exec();
+    let err = cmd.exec();
     Error::io("systemd-notify", err)
 }

@@ -110,3 +110,94 @@ fn walk(base: &Path, dir: &Path, id: &str) -> Result<Option<DesktopEntry>> {
     }
     Ok(None)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::with_env;
+
+    /// Build `<tmp>/applications/...` with the given `(relpath, contents)` files
+    /// and return the data-home root.
+    fn data_home(files: &[(&str, &str)]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "wsmr-find-{}-{:p}",
+            std::process::id(),
+            files as *const _
+        ));
+        let apps = root.join("applications");
+        for (rel, content) in files {
+            let p = apps.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, content).unwrap();
+        }
+        root
+    }
+
+    fn isolate<T>(root: &Path, f: impl FnOnce() -> T) -> T {
+        with_env(
+            &[
+                ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
+                ("XDG_DATA_DIRS", Some("")), // no system dirs
+            ],
+            f,
+        )
+    }
+
+    #[test]
+    fn find_entry_top_level_and_nested() {
+        let root = data_home(&[
+            ("foo.desktop", "[Desktop Entry]\nExec=foo\n"),
+            ("sub/bar.desktop", "[Desktop Entry]\nExec=bar\n"),
+            ("note.txt", "ignored"),
+        ]);
+        isolate(&root, || {
+            assert!(find_entry("applications", "foo.desktop").unwrap().is_some());
+            // nested id has '/' replaced by '-'
+            assert!(
+                find_entry("applications", "sub-bar.desktop")
+                    .unwrap()
+                    .is_some()
+            );
+            // non-.desktop and unknown id miss
+            assert!(find_entry("applications", "note.txt").unwrap().is_none());
+            assert!(
+                find_entry("applications", "nope.desktop")
+                    .unwrap()
+                    .is_none()
+            );
+            // missing subdir is fine
+            assert!(
+                find_entry("missing-subdir", "foo.desktop")
+                    .unwrap()
+                    .is_none()
+            );
+        });
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn find_first_matches_predicate() {
+        let root = data_home(&[
+            (
+                "a.desktop",
+                "[Desktop Entry]\nExec=a\nCategories=Utility;\n",
+            ),
+            (
+                "term.desktop",
+                "[Desktop Entry]\nExec=term\nCategories=TerminalEmulator;\n",
+            ),
+            ("broken.desktop", "no group here\n"), // fails parse → skipped
+        ]);
+        isolate(&root, || {
+            let found = find_first("applications", |_id, e| {
+                e.categories().iter().any(|c| c == "TerminalEmulator")
+            })
+            .unwrap();
+            assert!(found.is_some());
+            assert_eq!(found.unwrap().exec(None).unwrap(), vec!["term"]);
+            // predicate never matches → None
+            assert!(find_first("applications", |_, _| false).unwrap().is_none());
+        });
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

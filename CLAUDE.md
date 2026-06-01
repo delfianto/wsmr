@@ -55,6 +55,32 @@ scripts/linux-integration.sh     # full session bootstrap on real systemd (Tier 
 # or via the Makefile: make test-unit / test-linux / test-integration / test
 ```
 
+## Code coverage (cargo-llvm-cov)
+
+```bash
+scripts/coverage.sh unit     # fast NATIVE subset (macOS Homebrew LLVM); not the gate
+scripts/coverage.sh merged   # authoritative >=90% gate (Podman); the real number
+# or: make coverage-unit / make coverage
+```
+
+- **Merged is the real number.** A macOS unit-test profile and a Linux
+  integration profile can't be merged (different binaries; the `cfg(linux)` pidfd
+  path only exists in the Linux build), so the merged number is produced
+  end-to-end inside one coverage container (`Containerfile.coverage` =
+  systemd-as-PID-1 + Rust): one instrumented build, exercised by BOTH the unit
+  tests and the Tier-B integration smoke, reported together
+  (`tests/integration/coverage-run.sh`), gated at `--fail-under-lines 90`.
+- `scripts/coverage.sh` auto-selects by environment (`uname`, `$CI`,
+  `/run/.containerenv`, podman presence): inside a container → run cargo-llvm-cov
+  directly; podman available → merged; else native `unit` with a PARTIAL warning.
+- **Pre-exec profile flush:** wsmr ends most processes with `exec()`, which skips
+  LLVM's `atexit` profraw write. `crate::coverage::flush_before_exec()` (compiled
+  only under `cfg(coverage)`, a no-op otherwise) flushes right before each
+  `exec()`; the coverage container also propagates `LLVM_PROFILE_FILE` into the
+  user manager's activation env so unit-spawned wsmr processes are instrumented.
+- Env-driven unit tests serialize through `testutil::with_env` (env is process-
+  global and `set_var` is `unsafe` in 2024).
+
 - `Containerfile`: Rust + `build-essential` only (NO libdbus/libsystemd — wsmr is
   pure-Rust `zbus` and shells out to `systemctl`/`systemd-notify`).
 - Source is live bind-mounted; the cargo registry and the Linux `target/` are

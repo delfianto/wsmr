@@ -93,3 +93,58 @@ pub fn waitpid(pid: i32) -> Result<()> {
 pub fn waitpid(_pid: i32) -> Result<()> {
     Err(Error::todo("M3", "waitpid (pidfd is Linux-only)"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::with_env;
+
+    #[test]
+    fn wait_timeout_env_and_default() {
+        with_env(&[("UWSM_WAIT_VARNAMES_TIMEOUT", None)], || {
+            assert_eq!(wait_timeout(), Duration::from_secs(30));
+        });
+        with_env(&[("UWSM_WAIT_VARNAMES_TIMEOUT", Some("5"))], || {
+            assert_eq!(wait_timeout(), Duration::from_secs(5));
+        });
+        // invalid / out-of-range → default
+        with_env(&[("UWSM_WAIT_VARNAMES_TIMEOUT", Some("0"))], || {
+            assert_eq!(wait_timeout(), Duration::from_secs(30));
+        });
+        with_env(&[("UWSM_WAIT_VARNAMES_TIMEOUT", Some("nope"))], || {
+            assert_eq!(wait_timeout(), Duration::from_secs(30));
+        });
+    }
+
+    #[test]
+    fn settle_time_env_and_default() {
+        with_env(&[("UWSM_WAIT_VARNAMES_SETTLETIME", None)], || {
+            assert_eq!(settle_time(), Duration::from_secs_f64(0.2));
+        });
+        with_env(&[("UWSM_WAIT_VARNAMES_SETTLETIME", Some("0.5"))], || {
+            assert_eq!(settle_time(), Duration::from_secs_f64(0.5));
+        });
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn waitpid_dead_pid_is_ok() {
+        // A PID that almost certainly doesn't exist → pidfd_open ESRCH → Ok.
+        assert!(waitpid(2_000_000_000).is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn waitpid_blocks_until_child_exits() {
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        assert!(waitpid(pid).is_ok());
+        let _ = child.wait();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn waitpid_is_stub_off_linux() {
+        assert!(waitpid(1).is_err());
+    }
+}

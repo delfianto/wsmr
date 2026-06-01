@@ -1,0 +1,40 @@
+# Coverage image for wsmr: Tier-B systemd base + the Rust toolchain.
+#
+# The MERGED coverage number must be produced in a single Linux environment so
+# the unit tests and the integration smoke share one instrumented build with
+# consistent source paths (see tests/integration/coverage-run.sh). That means
+# this image needs BOTH systemd-as-PID-1 (to run the integration smoke against a
+# live user manager) AND cargo + cargo-llvm-cov (to build/run/report). The split
+# Tier-A/Tier-B images can't do this because their profiles would come from two
+# different binaries.
+FROM debian:bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV container=podman
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        systemd systemd-sysv dbus dbus-user-session libpam-systemd \
+        procps iproute2 sudo ca-certificates curl build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    # trim units that are pointless in a container
+    && find /etc/systemd/system /lib/systemd/system \
+        -path '*.wants/*' \
+        \( -name 'getty*' -o -name 'systemd-udevd*' -o -name 'systemd-firstboot*' \) \
+        -delete 2>/dev/null || true
+
+# Rust toolchain (stable; edition 2024 needs >= 1.85) + the coverage component
+# and cargo-llvm-cov. Installed to a system-wide location so both root (build +
+# report) and the tester user (integration smoke) can use the same binary.
+ENV RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --default-toolchain stable --profile minimal \
+        --component llvm-tools-preview \
+    && /opt/rust/bin/cargo install cargo-llvm-cov --locked
+ENV PATH="/opt/rust/bin:${PATH}"
+ENV CARGO_TERM_COLOR=always
+
+# Non-root test user; its user manager + session bus is what wsmr talks to.
+RUN useradd -m -s /bin/bash tester
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]
