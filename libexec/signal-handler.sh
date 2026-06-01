@@ -1,4 +1,8 @@
 #!/bin/sh
+#
+# Adapted from uwsm (https://github.com/Vladimir-csp/uwsm),
+# uwsm-libexec/signal-handler.sh — Copyright (c) 2022 Vladimir-csp, MIT License.
+# See THIRD-PARTY-LICENSES at the repo root for the full notice.
 
 # shellcheck disable=SC2059
 printf_out() {
