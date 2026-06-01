@@ -16,7 +16,7 @@ jobs:
     name: fmt + clippy + test (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -35,7 +35,7 @@ jobs:
     name: systemd integration (Podman Tier B)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install podman
         run: |
           sudo apt-get update
@@ -52,7 +52,7 @@ jobs:
     name: merged coverage (>= 90% lines)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install podman
         run: |
           sudo apt-get update
