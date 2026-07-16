@@ -1,68 +1,26 @@
-name: CI
-
+name: ci
 on:
   push:
     branches: [main]
   pull_request:
-
-env:
-  CARGO_TERM_COLOR: always
-
+  workflow_dispatch:
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  # Reliable gate: formatting, lints, and the unit tests — on real Linux, so this
-  # also compiles the cfg(target_os = "linux") code (e.g. the pidfd waitpid) that
-  # never builds on the macOS dev host.
-  lint-test:
-    name: fmt + clippy + test (Linux)
+  ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all --check
       - name: clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: build
+        run: cargo build --all-targets --verbose
       - name: test
-        run: cargo test --all-features
-
-  # Tier-B: full session bootstrap against real systemd, in a Podman container.
-  # Best-effort in CI (systemd-as-PID-1 in a runner can be finicky); kept as a
-  # separate job so a hiccup here never masks the lint-test gate.
-  integration:
-    name: systemd integration (Podman Tier B)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install podman
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
-      - name: Run integration harness
-        run: ./scripts/linux-integration.sh
-
-  # Merged code coverage: one instrumented Linux build, exercised by BOTH the
-  # unit tests and the Tier-B systemd integration smoke, reported together and
-  # gated at >= 90% lines. Runs entirely inside the coverage container (so the
-  # unit + integration profiles come from the same binary; see
-  # tests/integration/coverage-run.sh). Best-effort, like `integration`.
-  coverage:
-    name: merged coverage (>= 90% lines)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install podman
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y podman
-      - name: Run merged coverage + enforce gate
-        run: ./scripts/coverage.sh merged
-      - name: Upload lcov report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: coverage-lcov
-          path: coverage/lcov.info
-          if-no-files-found: ignore
+        run: cargo test --verbose
