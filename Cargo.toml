@@ -3,6 +3,14 @@ name = "wsmr"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+anyhow = "1.0.103"
+clap = { version = "4.6.2", features = ["derive", "env"] }
+libc = "0.2.186"
+serde = { version = "1.0.228", features = ["derive"] }
+thiserror = "2.0.18"
+zbus = "5.17.0"
+
 # `coverage` is set by cargo-llvm-cov alongside -Cinstrument-coverage; declare it
 # so check-cfg (and thus `clippy -D warnings`) doesn't flag it as unexpected.
 [lints.rust]
@@ -18,11 +26,3 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
-
-[dependencies]
-anyhow = "1.0.102"
-clap = { version = "4.6.1", features = ["derive", "env"] }
-libc = "0.2.186"
-serde = { version = "1.0.228", features = ["derive"] }
-thiserror = "2.0.18"
-zbus = "5.16.0"
