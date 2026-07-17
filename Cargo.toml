@@ -11,15 +11,9 @@ serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 zbus = "5.17.0"
 
-# `coverage` is set by cargo-llvm-cov alongside -Cinstrument-coverage; declare it
-# so check-cfg (and thus `clippy -D warnings`) doesn't flag it as unexpected.
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
 
-# Release: optimize hard for execution speed and ship a stripped binary.
-# (Trades compile time for runtime: fat LTO + a single codegen unit let the
-# optimizer see the whole program; panic=abort drops unwinding overhead/landing
-# pads. Portable across CPUs — use `just build-native` for a CPU-tuned build.)
 [profile.release]
 opt-level = 3
 lto = "fat"
