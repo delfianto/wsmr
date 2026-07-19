@@ -1,58 +1,116 @@
-# wsmr task runner — run `just` (or `just --list`) to see everything.
+# wsmr — baseline + container/coverage extras
 #
-# Native recipes work on macOS *and* Linux. The container recipes
-# (`test-linux`, `build-linux`, `integration`, `coverage*`) need podman — they
-# spin up a Linux / systemd-as-PID-1 container (see CLAUDE.md). On real Linux
-# podman runs natively (no VM), so they're just faster there.
+# Native recipes work on macOS *and* Linux. Container recipes need podman.
+
+bins    := "wsmr"
+bin_dir := env_var("HOME") / ".local/bin"
+sys_dir := "/usr/local/bin"
 
 set positional-arguments
 
-# list recipes (default)
+# List available recipes
 default:
     @just --list
 
-# ---------------------------------------------------------------- native loop
-
-# fast type-check — the primary inner loop
-check:
-    cargo check
-
-# debug build
+# Build release binaries
 build:
-    cargo build
-
-# release build: stripped + heavily optimized (fat LTO, 1 codegen unit, panic=abort)
-build-release:
     cargo build --release
 
-# release build tuned for THIS machine's CPU — fastest, but NOT portable
+# Debug build
+build-debug:
+    cargo build
+
+# Release build tuned for THIS machine's CPU — fastest, but NOT portable
 build-native:
     RUSTFLAGS="-C target-cpu=native" cargo build --release
 
-# run the binary, e.g. `just run start sway`  (Linux only at runtime)
+# Run the binary, e.g. `just run start sway` (Linux only at runtime)
 run *args:
-    cargo run -- "$@"
+    cargo run --release -- "$@"
 
-# unit/doc tests, native (on Linux this also runs the cfg(linux) paths)
+# Unit/doc tests, native
 test *args:
     cargo test "$@"
 
-# format the tree
+# Auto-format the tree
 fmt:
     cargo fmt --all
 
-# check formatting (CI gate)
+# Check formatting (CI gate)
 fmt-check:
     cargo fmt --all -- --check
 
-# lint with warnings denied (CI gate)
-clippy:
+# Lint — warnings denied (CI gate)
+lint:
     cargo clippy --all-targets --all-features -- -D warnings
 
-# the full native gate, mirroring CI's lint-test job: fmt + clippy + test
-lint: fmt-check clippy test
+# Full local gate, mirrors CI (fmt + clippy + tests)
+check: fmt-check lint test
 
-# ------------------------------------------------------- Linux container (podman)
+# Compress every release binary with upx (skips a binary if already packed)
+compress: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v upx >/dev/null 2>&1; then
+        echo "compress: upx not found in PATH" >&2
+        exit 1
+    fi
+    for b in {{bins}}; do
+        path="target/release/$b"
+        if [ ! -f "$path" ]; then
+            echo "compress: missing $path (is bins= correct?)" >&2
+            exit 1
+        fi
+        upx -t "$path" >/dev/null 2>&1 || upx --best --lzma "$path"
+        echo "compressed $path"
+    done
+
+# Install into ~/.local/bin (default) or /usr/local/bin (--system, via sudo)
+install *flags: compress
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{bin_dir}}"
+    sudo=""
+    for f in {{flags}}; do
+        case "$f" in
+            --system) dir="{{sys_dir}}"; sudo="sudo" ;;
+            *) echo "install: unknown flag '$f' (only --system is supported)" >&2; exit 1 ;;
+        esac
+    done
+    for b in {{bins}}; do
+        $sudo install -Dm755 "target/release/$b" "$dir/$b"
+        echo "installed $dir/$b"
+    done
+
+# Remove installed binaries (pass --system for /usr/local/bin via sudo)
+uninstall *flags:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{bin_dir}}"
+    sudo=""
+    for f in {{flags}}; do
+        case "$f" in
+            --system) dir="{{sys_dir}}"; sudo="sudo" ;;
+            *) echo "uninstall: unknown flag '$f' (only --system is supported)" >&2; exit 1 ;;
+        esac
+    done
+    for b in {{bins}}; do
+        $sudo rm -f "$dir/$b"
+        echo "removed $dir/$b"
+    done
+
+# Remove build artifacts + coverage output
+clean:
+    cargo clean
+    rm -rf coverage
+
+# ---------------------------------------------------------------------------
+# Specials — Linux container (podman) + coverage
+# ---------------------------------------------------------------------------
+
+# Fast type-check (inner loop; not the CI gate — use `check` for that)
+typecheck:
+    cargo check
 
 # build + cargo test inside the Debian container (Tier A); optional test filter
 test-linux *args:
@@ -65,8 +123,6 @@ build-linux:
 # full session bootstrap on real systemd (Tier B)
 integration:
     ./scripts/linux-integration.sh
-
-# ----------------------------------------------------------------- coverage
 
 # fast NATIVE coverage subset (no cfg(linux)/integration paths; not the gate)
 coverage-unit:
@@ -81,12 +137,5 @@ coverage-html:
     WSMR_COV_HTML=1 ./scripts/coverage.sh merged
     @echo "HTML report: coverage/html/index.html"
 
-# ---------------------------------------------------------------------- misc
-
 # everything: native gate + Linux build + integration
-ci: lint build-linux integration
-
-# remove build artifacts + coverage output
-clean:
-    cargo clean
-    rm -rf coverage
+ci: check build-linux integration
