@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn generate_then_regenerate_is_idempotent() {
         let td = TempDir::new();
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         let out = apply_generate(td.path(), plan).unwrap();
         assert!(out.changed);
         assert!(td.path().join("wayland-wm@.service").exists());
@@ -272,7 +272,7 @@ mod tests {
                 .exists()
         );
 
-        let plan2 = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan2 = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         assert!(plan2.is_empty());
         let out2 = apply_generate(td.path(), plan2).unwrap();
         assert!(!out2.changed);
@@ -281,7 +281,7 @@ mod tests {
     #[test]
     fn manifest_records_only_what_was_written() {
         let td = TempDir::new();
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         apply_generate(td.path(), plan).unwrap();
 
         let manifest = Manifest::load(td.path()).unwrap();
@@ -294,7 +294,7 @@ mod tests {
         let td = TempDir::new();
         std::fs::write(td.path().join("wayland-wm@.service"), "foreign\n").unwrap();
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         assert!(!plan.conflicts.is_empty());
         let err = apply_generate(td.path(), plan).unwrap_err();
         assert!(err.to_string().contains("wayland-wm@.service"));
@@ -309,11 +309,11 @@ mod tests {
     #[test]
     fn remove_all_leaves_graph_units_and_removes_owned_dropins() {
         let td = TempDir::new();
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         apply_generate(td.path(), plan).unwrap();
         assert!(td.path().join("wayland-wm@.service").exists());
 
-        let removal = plan_remove_all(td.path()).unwrap();
+        let removal = plan_remove_all(td.path(), None).unwrap();
         let out = apply_removal(td.path(), removal).unwrap();
         assert!(out.changed);
         // static graph survives
@@ -322,7 +322,7 @@ mod tests {
         assert!(!td.path().join("wayland-wm@sway.service.d").exists());
 
         // idempotent: running it again changes nothing
-        let removal2 = plan_remove_all(td.path()).unwrap();
+        let removal2 = plan_remove_all(td.path(), None).unwrap();
         let out2 = apply_removal(td.path(), removal2).unwrap();
         assert!(!out2.changed);
     }
@@ -330,14 +330,14 @@ mod tests {
     #[test]
     fn remove_all_never_deletes_a_sibling_foreign_dropin() {
         let td = TempDir::new();
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         apply_generate(td.path(), plan).unwrap();
 
         // a foreign sibling drop-in in the same directory
         let sibling = td.path().join("wayland-wm@sway.service.d/10_foreign.conf");
         std::fs::write(&sibling, "not ours\n").unwrap();
 
-        let removal = plan_remove_all(td.path()).unwrap();
+        let removal = plan_remove_all(td.path(), None).unwrap();
         apply_removal(td.path(), removal).unwrap();
 
         // our file is gone, but the directory survives because the sibling
@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn remove_missing_dir_is_noop() {
         let missing = std::env::temp_dir().join(format!("wsmr-absent-{}", std::process::id()));
-        let plan = plan_remove_all(&missing).unwrap();
+        let plan = plan_remove_all(&missing, None).unwrap();
         assert!(plan.removes.is_empty());
         let out = apply_removal(&missing, plan).unwrap();
         assert!(!out.changed);
@@ -376,7 +376,7 @@ mod tests {
             bin_path: "/usr/local/bin/wsmr".into(),
             waitpid_bin: "waitpid".into(),
         };
-        let plan = plan_generate(td.path(), &new_ctx, &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &new_ctx, &dropin_input(), true).unwrap();
         assert!(plan.conflicts.is_empty());
         // sabotage a later planned write so it cannot possibly succeed: its
         // destination directory is occupied by a plain file.

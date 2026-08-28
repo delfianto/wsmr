@@ -35,9 +35,13 @@ pub enum Command {
 }
 
 /// Where unit files are written.
+///
+/// Canonical values are `run`/`home`, matching uwsm's `-U {run,home}`
+/// exactly; `runtime` is kept as an alias for wsmr's own prior spelling.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rung {
     /// `$XDG_RUNTIME_DIR/systemd/user`.
+    #[value(name = "run", alias = "runtime")]
     Runtime,
     /// `$XDG_CONFIG_HOME/systemd/user`.
     Home,
@@ -81,18 +85,48 @@ pub struct StartArgs {
     /// Colon-separated desktop names (sets XDG_CURRENT_DESKTOP).
     #[arg(short = 'D', long = "desktop-names")]
     pub desktop_names: Option<String>,
-    /// Treat `-D` names as exclusive (don't merge from environment).
+    /// Append `-D` names to other sources (default; explicit opposite of `-e`).
+    ///
+    /// Deliberately reaches no behavior beyond parsing (matches upstream:
+    /// `-a`'s only effect is setting `desktop_names_exclusive = false`, which
+    /// is already the default) — its entire purpose is to exist as an
+    /// explicit, mutually-exclusive counterpart to `-e` for scripts/muscle
+    /// memory that expect it. Not a silently-unused option.
+    #[arg(
+        short = 'a',
+        long = "append",
+        conflicts_with = "desktop_names_exclusive"
+    )]
+    pub desktop_names_append: bool,
+    /// Use `-D` names exclusively, discarding other sources.
     #[arg(short = 'e', long = "exclusive")]
     pub desktop_names_exclusive: bool,
-    /// Hardcode the resolved compositor path into the unit.
-    #[arg(short = 'a', long = "hardcode")]
+    /// Hardcode the resolved compositor path (with path) into the unit.
+    #[arg(short = 'F', long = "hardcode")]
     pub hardcode: bool,
-    /// Where to write generated unit files.
-    #[arg(short = 'U', long = "unit-rung", default_value = "runtime")]
-    pub unit_rung: Rung,
-    /// Disable tweak drop-ins.
-    #[arg(long = "no-tweaks")]
+    /// Where to write generated unit files (default: `run`, or `$UWSM_UNIT_RUNG`).
+    #[arg(short = 'U', long = "unit-rung")]
+    pub unit_rung: Option<Rung>,
+    /// Do not generate tweak drop-ins.
+    #[arg(short = 't', long = "no-tweaks", conflicts_with = "tweaks")]
     pub no_tweaks: bool,
+    /// Generate tweak drop-ins (default; explicit opposite of `-t`).
+    #[arg(short = 'T', long = "tweaks")]
+    pub tweaks: bool,
+    /// Seconds to wait for system graphical.target and warn if timed out
+    /// (negative disables).
+    #[arg(
+        short = 'g',
+        value_name = "S",
+        default_value_t = 60,
+        allow_negative_numbers = true,
+        conflicts_with = "gst_abort_seconds"
+    )]
+    pub gst_warn_seconds: i64,
+    /// Seconds to wait for system graphical.target and abort if timed out
+    /// (takes precedence over `-g`; negative disables).
+    #[arg(short = 'G', value_name = "S", default_value_t = -1, allow_negative_numbers = true, conflicts_with = "gst_warn_seconds")]
+    pub gst_abort_seconds: i64,
     /// Compositor command (or wayland-sessions entry) and its arguments.
     #[arg(
         required = true,
@@ -109,12 +143,13 @@ pub struct StopArgs {
     /// Dry run.
     #[arg(short = 'n', long = "dry-run")]
     pub dry_run: bool,
-    /// Remove generated unit files after stopping (optionally a comma list of marks).
+    /// Also remove unit files: all, or only matching mark(s) — compositor
+    /// ID, `tweaks`, `generic` — as a comma-separated list.
     #[arg(short = 'r', long = "remove", num_args = 0..=1, default_missing_value = "")]
     pub remove: Option<String>,
-    /// Which rung to remove units from.
-    #[arg(short = 'U', long = "unit-rung", default_value = "runtime")]
-    pub unit_rung: Rung,
+    /// Which rung to remove units from (default: `run`, or `$UWSM_UNIT_RUNG`).
+    #[arg(short = 'U', long = "unit-rung")]
+    pub unit_rung: Option<Rung>,
 }
 
 /// `finalize` arguments.
@@ -156,11 +191,16 @@ pub struct AppArgs {
     /// Unit description.
     #[arg(short = 'd', long = "description")]
     pub unit_description: Option<String>,
-    /// Extra `KEY=VALUE` systemd unit properties (repeatable).
-    #[arg(long = "unit-property", value_name = "KEY=VALUE")]
+    /// Pass a unit property assignment (repeatable).
+    #[arg(
+        short = 'p',
+        long = "property",
+        alias = "unit-property",
+        value_name = "Property=value"
+    )]
     pub unit_properties: Vec<String>,
-    /// Silence app output (`--silent` alone means both).
-    #[arg(long = "silent", num_args = 0..=1, require_equals = true, default_missing_value = "both")]
+    /// Silence stdout, stderr, or both.
+    #[arg(short = 'S', long = "silent")]
     pub silent: Option<Silence>,
     /// Command (or desktop entry `id[:action]`) and its arguments.
     #[arg(trailing_var_arg = true, num_args = 0.., value_name = "CMD [ARGS...]")]

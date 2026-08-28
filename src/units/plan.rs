@@ -69,8 +69,15 @@ pub struct RemovalPlan {
 }
 
 /// Compute the full generation plan for `dropins` into `dir`: the static
-/// graph plus this compositor's `50_custom.conf` drop-ins. Read-only.
-pub fn plan_generate(dir: &Path, ctx: &RenderCtx, dropins: &DropinInput) -> Result<GenerationPlan> {
+/// graph, the fixed tweak drop-ins (written when `tweaks_enabled`, else
+/// removed if wsmr owns them — see `templates::TWEAKS`), and this
+/// compositor's `50_custom.conf` drop-ins. Read-only.
+pub fn plan_generate(
+    dir: &Path,
+    ctx: &RenderCtx,
+    dropins: &DropinInput,
+    tweaks_enabled: bool,
+) -> Result<GenerationPlan> {
     let manifest = Manifest::load(dir)?;
     let mut plan = GenerationPlan {
         writes: Vec::new(),
@@ -82,6 +89,11 @@ pub fn plan_generate(dir: &Path, ctx: &RenderCtx, dropins: &DropinInput) -> Resu
     for unit in templates::GRAPH {
         let content = templates::render(unit.body, ctx);
         classify_write(dir, unit.name, content, &mut plan)?;
+    }
+
+    for tweak in templates::TWEAKS {
+        let wanted = tweaks_enabled.then(|| templates::render(tweak.body, ctx));
+        classify_dropin(dir, tweak.name, wanted, &mut plan)?;
     }
 
     let preloader = format!(
@@ -186,15 +198,20 @@ fn classify_dropin(
     Ok(())
 }
 
-/// Compute a plan removing everything wsmr owns and tracks in `dir`.
+/// Compute a plan removing everything wsmr owns and tracks in `dir`, matching
+/// upstream's `-r` mark filter (`main.py:1933`): `marks: None` removes
+/// everything removable; `Some(marks)` removes only entries whose mark (a
+/// compositor id, or `"tweaks"`) is in the list — see [`mark_of`].
 ///
-/// Only per-compositor `50_custom.conf` drop-ins are ever removed here. The
-/// static graph units (`templates::GRAPH`) are deliberately excluded even if
-/// somehow present in the manifest: they are byte-identical, shared
-/// infrastructure with uwsm (see `docs/coexistence.md`), so content alone can
-/// never distinguish "wsmr's copy" from "uwsm's copy" — removing them is
-/// never safe to automate.
-pub fn plan_remove_all(dir: &Path) -> Result<RemovalPlan> {
+/// Only per-compositor `50_custom.conf` drop-ins and the fixed tweak
+/// drop-ins are ever removed here. The static graph units
+/// (`templates::GRAPH`) are deliberately excluded even if somehow present in
+/// the manifest: they are byte-identical, shared infrastructure with uwsm
+/// (see `docs/coexistence.md`), so content alone can never distinguish
+/// "wsmr's copy" from "uwsm's copy" — removing them is never safe to
+/// automate. (Upstream's `"generic"` mark, which covers its shipped-static
+/// graph, therefore has nothing to match here.)
+pub fn plan_remove_all(dir: &Path, marks: Option<&[String]>) -> Result<RemovalPlan> {
     let manifest = Manifest::load(dir)?;
     let mut plan = RemovalPlan {
         removes: Vec::new(),
@@ -206,6 +223,10 @@ pub fn plan_remove_all(dir: &Path) -> Result<RemovalPlan> {
         .manifest
         .tracked()
         .filter(|n| is_removable_dropin(n))
+        .filter(|n| match marks {
+            None => true,
+            Some(ms) => mark_of(n).is_some_and(|m| ms.iter().any(|x| x == m)),
+        })
         .map(String::from)
         .collect();
 
@@ -233,8 +254,34 @@ pub fn plan_remove_all(dir: &Path) -> Result<RemovalPlan> {
 }
 
 fn is_removable_dropin(relname: &str) -> bool {
+    is_tweak(relname) || is_compositor_dropin(relname)
+}
+
+fn is_tweak(relname: &str) -> bool {
+    templates::TWEAKS.iter().any(|t| t.name == relname)
+}
+
+fn is_compositor_dropin(relname: &str) -> bool {
     relname.ends_with(".service.d/50_custom.conf")
         && (relname.starts_with("wayland-wm@") || relname.starts_with("wayland-wm-env@"))
+}
+
+/// The `-r` mark a tracked path belongs to: a compositor id for its
+/// `50_custom.conf` drop-ins, or `"tweaks"` for the fixed tweak drop-ins.
+/// `None` for anything `plan_remove_all` wouldn't remove in the first place.
+fn mark_of(relname: &str) -> Option<&str> {
+    if is_tweak(relname) {
+        return Some("tweaks");
+    }
+    for prefix in ["wayland-wm-env@", "wayland-wm@"] {
+        if let Some(id) = relname
+            .strip_prefix(prefix)
+            .and_then(|rest| rest.strip_suffix(".service.d/50_custom.conf"))
+        {
+            return Some(id);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -291,12 +338,15 @@ mod tests {
         let before: Vec<_> = std::fs::read_dir(td.path()).unwrap().collect();
         assert!(before.is_empty());
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         assert!(plan.conflicts.is_empty());
         // graph + both dropins (the absolute cmdline in `dropin_input()`
         // triggers both the preloader's `-- %I <path>` override and the
         // service's hardcoded `ExecStart=`).
-        assert_eq!(plan.writes.len(), templates::GRAPH.len() + 2);
+        assert_eq!(
+            plan.writes.len(),
+            templates::GRAPH.len() + templates::TWEAKS.len() + 2
+        );
 
         let after: Vec<_> = std::fs::read_dir(td.path()).unwrap().collect();
         assert!(after.is_empty(), "plan_generate must not write anything");
@@ -305,7 +355,7 @@ mod tests {
     #[test]
     fn absent_destination_plans_a_write() {
         let td = TempDir::new();
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         assert!(
             plan.writes
                 .iter()
@@ -322,7 +372,7 @@ mod tests {
         )
         .unwrap();
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         assert!(
             plan.conflicts
                 .iter()
@@ -360,7 +410,7 @@ mod tests {
             bin_path: "/usr/local/bin/wsmr".into(),
             waitpid_bin: "waitpid".into(),
         };
-        let plan = plan_generate(td.path(), &new_ctx, &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &new_ctx, &dropin_input(), true).unwrap();
         assert!(plan.conflicts.is_empty());
         assert!(plan.writes.iter().any(|w| w.relname == unit.name));
     }
@@ -381,7 +431,7 @@ mod tests {
         );
         manifest.save(td.path()).unwrap();
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         assert!(
             plan.conflicts
                 .iter()
@@ -396,7 +446,7 @@ mod tests {
         // simulate a file another tool wrote with byte-identical content, no manifest at all
         std::fs::write(td.path().join(templates::GRAPH[0].name), &content).unwrap();
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
         assert!(plan.conflicts.is_empty());
         assert!(
             !plan
@@ -425,7 +475,7 @@ mod tests {
             cmdline: vec!["sway".into()],
             ..Default::default()
         };
-        let plan = plan_generate(td.path(), &ctx(), &minimal).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &minimal, true).unwrap();
         assert!(plan.conflicts.is_empty());
         assert!(!plan.removes.iter().any(|r| r.relname == relname));
         assert_eq!(
@@ -450,7 +500,7 @@ mod tests {
         .unwrap();
 
         let before = std::fs::read_to_string(td.path().join(templates::GRAPH[0].name)).unwrap();
-        let plan = plan_remove_all(td.path()).unwrap();
+        let plan = plan_remove_all(td.path(), None).unwrap();
         assert_eq!(
             std::fs::read_to_string(td.path().join(templates::GRAPH[0].name)).unwrap(),
             before
@@ -478,7 +528,7 @@ mod tests {
         std::fs::create_dir_all(td.path().join("wayland-wm@sway.service.d")).unwrap();
         std::fs::write(td.path().join(relname), "edited by someone else\n").unwrap();
 
-        let plan = plan_remove_all(td.path()).unwrap();
+        let plan = plan_remove_all(td.path(), None).unwrap();
         assert!(plan.removes.is_empty());
         assert_eq!(plan.skipped.len(), 1);
         assert_eq!(plan.skipped[0].relname, relname);

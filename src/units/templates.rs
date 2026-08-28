@@ -264,6 +264,49 @@ Before=wayland-session-shutdown.target
     },
 ];
 
+/// Fixed, non-compositor-specific drop-ins fixing common desktop-integration
+/// issues (autostart app slicing/ordering, flatpak scope ordering, a KDE
+/// portal ordering hotfix). Ported verbatim from `generate_tweaks`
+/// (`main.py:1533`); toggled by `start -t`/`-T` (`X-UWSMMark=tweaks`, so
+/// `stop -r tweaks` removes only these).
+pub const TWEAKS: &[UnitTemplate] = &[
+    UnitTemplate {
+        name: "app-@autostart.service.d/slice-tweak.conf",
+        body: r#"# injected by @BIN_NAME@, do not edit
+[Unit]
+X-UWSMMark=tweaks
+# make autostart apps stoppable/restartable by target
+PartOf=xdg-desktop-autostart.target
+After=xdg-desktop-autostart.target
+[Service]
+# also put them in special graphical app slice
+Slice=app-graphical.slice
+EnvironmentFile=-%t/@BIN_NAME@/env_session.conf
+"#,
+    },
+    UnitTemplate {
+        name: "app-flatpak-.scope.d/order-tweak.conf",
+        body: r#"# injected by @BIN_NAME@, do not edit
+[Unit]
+X-UWSMMark=tweaks
+# terminate with session properly
+PartOf=graphical-session.target
+After=graphical-session.target
+[Scope]
+# also put them in special graphical app slice
+Slice=app-graphical.slice
+"#,
+    },
+    UnitTemplate {
+        name: "plasma-xdg-desktop-portal-kde.service.d/order-tweak.conf",
+        body: r#"# injected by @BIN_NAME@, do not edit
+[Unit]
+X-UWSMMark=tweaks
+After=graphical-session.target
+"#,
+    },
+];
+
 /// Inputs to the per-compositor `50_custom.conf` drop-in generation.
 #[derive(Debug, Default, Clone)]
 pub struct DropinInput {
@@ -432,6 +475,21 @@ mod tests {
             GRAPH
                 .iter()
                 .any(|u| u.name == "wayland-session-shutdown.target")
+        );
+    }
+
+    #[test]
+    fn tweaks_render_and_carry_the_mark() {
+        assert_eq!(TWEAKS.len(), 3);
+        for t in TWEAKS {
+            let out = render(t.body, &ctx());
+            assert!(out.contains("X-UWSMMark=tweaks"));
+            assert!(!out.contains("@BIN_"));
+        }
+        assert!(
+            TWEAKS
+                .iter()
+                .any(|t| t.name == "app-@autostart.service.d/slice-tweak.conf")
         );
     }
 

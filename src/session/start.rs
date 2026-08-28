@@ -20,6 +20,20 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+/// System `graphical.target` gate, driven by `start -g`/`-G`. Ports the
+/// mutually exclusive `gst_warn_seconds`/`gst_abort_seconds` handling
+/// (`main.py:1890`/`:4709`) — `-G` (abort) takes precedence over `-g` (warn)
+/// when both would apply; a negative value disables its own gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GstGate {
+    /// Don't check at all.
+    Disabled,
+    /// Wait up to this long; on timeout, warn and continue anyway.
+    Warn(Duration),
+    /// Wait up to this long; on timeout, refuse to start.
+    Abort(Duration),
+}
+
 /// Flags controlling `start`.
 pub struct StartOpts {
     /// Only (re)generate units, then exit.
@@ -28,8 +42,11 @@ pub struct StartOpts {
     pub dry_run: bool,
     /// Where to write unit files.
     pub rung: Rung,
-    /// If set, wait for the system `graphical.target` up to this long first.
-    pub gst_timeout: Option<Duration>,
+    /// System `graphical.target` gate (skipped entirely for `only_generate`
+    /// or `dry_run`, matching upstream).
+    pub gst_gate: GstGate,
+    /// Generate the fixed tweak drop-ins (`start -t`/`-T`).
+    pub tweaks: bool,
     /// Absolute path to the wsmr executable (for generated `ExecStart=`).
     pub bin_path: String,
 }
@@ -42,14 +59,12 @@ pub struct StartOpts {
 /// the systemd user manager is touched. A refusal (already active, or a plan
 /// conflict) or `--dry-run` therefore never generates, writes, or reloads.
 pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
-    // (1) optional system graphical.target gate (read-only)
-    if let Some(timeout) = opts.gst_timeout {
-        let sysbus = SystemBus::connect()?;
-        if !sysbus.wait_for_unit("graphical.target", &["active", "activating"], timeout)? {
-            return Err(Error::Resolve(
-                "system has not reached graphical.target".into(),
-            ));
-        }
+    // (1) optional system graphical.target gate (read-only). Skipped for
+    // only-generate/dry-run, matching upstream (`main.py:4710-4713`) — those
+    // modes don't actually start anything, so gating them on system state
+    // that has no bearing on what they do would just be noise.
+    if !opts.only_generate && !opts.dry_run {
+        gst_gate(opts.gst_gate)?;
     }
 
     // (2) refuse double start (read-only) before generating or reloading
@@ -65,7 +80,12 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
         bin_path: opts.bin_path.clone(),
         waitpid_bin: "waitpid".into(),
     };
-    let plan = plan_generate(&dir, &ctx, &build_dropins(comp, &opts.bin_path))?;
+    let plan = plan_generate(
+        &dir,
+        &ctx,
+        &build_dropins(comp, &opts.bin_path),
+        opts.tweaks,
+    )?;
 
     // Dry-run always reports the full plan — including any conflicts — before
     // any error is raised, so `--dry-run` is a strict superset of what a real
@@ -132,6 +152,32 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
     crate::coverage::flush_before_exec();
     let err = cmd.exec();
     Err(Error::io("systemd-cat", err))
+}
+
+/// Wait on the system `graphical.target` per `gate`, warning-and-continuing
+/// or aborting on timeout as configured. A no-op for [`GstGate::Disabled`].
+fn gst_gate(gate: GstGate) -> Result<()> {
+    let (timeout, abort) = match gate {
+        GstGate::Disabled => return Ok(()),
+        GstGate::Warn(t) => (t, false),
+        GstGate::Abort(t) => (t, true),
+    };
+    let sysbus = SystemBus::connect()?;
+    if sysbus.wait_for_unit("graphical.target", &["active", "activating"], timeout)? {
+        return Ok(());
+    }
+    if abort {
+        return Err(Error::Resolve(
+            "system has not reached graphical.target; aborting".into(),
+        ));
+    }
+    eprintln!(
+        "wsmr: system has not reached graphical.target. It might be a good idea to check the \
+         default system target, or screen for this with \"wsmr check may-start\". Continuing in \
+         5 seconds..."
+    );
+    std::thread::sleep(Duration::from_secs(5));
+    Ok(())
 }
 
 /// Pure refusal check, split out from [`run`] so it's unit-testable without a

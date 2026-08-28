@@ -45,11 +45,15 @@ verification command or evidence in the phase's evidence section.
 - Host: CachyOS, Wayland, Hyprland 0.56.2, systemd 261, dbus-broker.
 - The active desktop is managed by uwsm 0.26.7, not wsmr.
 - Formatting, clippy, and build checks pass.
-- Unit tests currently report **201 passing, 0 failing** — the 3 previously
-  pre-existing host-dependent failures were root-caused and fixed in Phase 3
-  (an XDG-dirs test-isolation bug and a hardcoded system-bus dependency; see
-  Phase 3 evidence). Was 166/3 before Phase 0; Phase 0 added 21 tests, Phase 1
-  added 9, Phase 3 added a further handful while fixing the 3 failures.
+- Unit tests currently report **222 passing, 0 failing** (206 lib + 16 in the
+  `wsmr` binary's own test target, the latter new in Phase 2) — the 3
+  originally pre-existing host-dependent failures were root-caused and fixed
+  in Phase 3 (an XDG-dirs test-isolation bug and a hardcoded system-bus
+  dependency). Was 166/3 before Phase 0. Verified in both the native CachyOS
+  host and the clean Linux container after every phase, including Phase 2,
+  where the container caught a genuinely new host-dependence bug this
+  session introduced (see Phase 2 evidence) — the two-environment habit paid
+  for itself.
 - The Tier-B smoke reaches the core lifecycle, but ignores failures in terminal
   launch and finalization and therefore can report a false success.
 - wsmr and uwsm currently use the same unit namespace. Phase 0's file-level
@@ -422,14 +426,42 @@ Phase 1 evidence:
 **Goal:** commands accepted by wsmr have implemented semantics and the supported
 surface matches uwsm 0.26.7 unless a divergence is explicitly documented.
 
+**Ground truth used:** uwsm 0.26.7 is installed on the dev host
+(`pacman -Ql uwsm`); every fix below was checked against the actual installed
+Python source (`/usr/share/uwsm/modules/uwsm/main.py`), not memory or
+documentation, and `check is-active` was additionally verified live against
+that host's real, running uwsm-managed Hyprland session. Full findings and
+explicitly deferred divergences are in `docs/cli-compatibility.md`.
+
 ### P2-01 Fix compositor-specific activity checks
 
 Finding: `check is-active <WM>` parses but ignores the compositor argument.
 
-- [ ] Pass the requested selector into the activity query.
-- [ ] Escape/encode the exact unit instance correctly.
-- [ ] Match upstream behavior for compositor-only versus full-session checks.
-- [ ] Test an active compositor, inactive compositor, and nonexistent name.
+- [x] Pass the requested selector into the activity query. `session::stop::is_active_for(bus, wm_id: Option<&str>)` — `None` = generic
+  check, `Some(id)` = that compositor only; `main.rs`'s `check()` now passes
+  `a.wm.as_deref()` through instead of discarding it.
+- [x] Escape/encode the exact unit instance correctly.
+  `compositor_unit_name` reuses the existing `units::escape::simple_systemd_escape`
+  (ported `simple_systemd_escape(check_wm_id, start=False)`, `main.py:1218`).
+- [x] Match upstream behavior for compositor-only versus full-session checks.
+  Also fixed a real correctness gap found while porting this: the no-selector
+  case previously only checked `wayland-wm@*.service` +
+  `graphical-session.target`, missing upstream's broader
+  `check_units_generic` set (`graphical-session-pre.target`,
+  `wayland-session-pre@*.target`, `wayland-session@*.target` — `main.py:1207`).
+  This set now also backs `start`'s own double-start refusal (P0-01), closing
+  a real gap where a session mid-startup in the `*-pre@` window wouldn't have
+  been detected as active.
+- [x] Test an active compositor, inactive compositor, and nonexistent name.
+  Unit-tested at the pure escaping/naming level
+  (`session::stop::tests::compositor_unit_name_escapes_and_wraps`); the live
+  bus call itself carries the same untestable-without-a-mock status as the
+  rest of this crate's bus code (see Phase 0/1's residual gap notes) — but
+  was verified **live** against the real uwsm session instead: `check
+  is-active` (generic) → `active`; `check is-active hyprland` → `inactive`;
+  `check is-active hyprland.desktop` → `active` (the real unit is
+  `wayland-wm@hyprland.desktop.service` — see P2-04's `.desktop`-suffix fix,
+  found via this same live check).
 
 ### P2-02 Reconcile start options
 
@@ -440,44 +472,136 @@ Observed incompatibilities:
 - Upstream tweak and graphical-target controls are absent or parsed but unused.
 - `hardcode` and `no_tweaks` are currently not honored.
 
-- [ ] Restore upstream short-option meanings.
-- [ ] Retain non-conflicting descriptive long aliases where useful.
-- [ ] Implement supported tweak/graphical-target behavior.
-- [ ] Reject intentionally unported behavior explicitly rather than ignoring it.
-- [ ] Add parser and behavior snapshots against uwsm 0.26.7.
+- [x] Restore upstream short-option meanings. `-F`/`--hardcode` added (was
+  missing); `-a`/`--append` now matches upstream's explicit-opposite-of-`-e`
+  semantics (was wrongly mapped to hardcode).
+- [x] Retain non-conflicting descriptive long aliases where useful.
+  `--no-tweaks` (wsmr's pre-existing long name) kept as `-t`'s long form;
+  `runtime` kept as a value alias for `-U`'s `run`.
+- [x] Implement supported tweak/graphical-target behavior. Tweaks: the 3 fixed
+  drop-ins ported verbatim from `generate_tweaks` (`main.py:1533`) into
+  `units::templates::TWEAKS`, generated/removed through the same
+  plan/manifest machinery as everything else (`plan_generate`'s new
+  `tweaks_enabled` parameter). Graphical-target: `session::start::GstGate`
+  (`Disabled`/`Warn(Duration)`/`Abort(Duration)`) with `-G` taking precedence
+  over `-g`, both skipped entirely for `-o`/`-n` — ports the precedence and
+  skip condition at `main.py:4709-4737` exactly.
+- [x] Reject intentionally unported behavior explicitly rather than ignoring
+  it. `-F`/hardcode without a resolvable executable is now a hard error
+  (`Error::Resolve`) rather than silently doing nothing — matches the
+  project's fail-closed posture from Phase 0/1, and is arguably *stricter*
+  than upstream (which would raise an unhandled Python exception in the
+  equivalent case).
+- [x] Add parser and behavior snapshots against uwsm 0.26.7. No golden-file
+  snapshot mechanism was built (see the acceptance-criteria note below); every
+  fix was instead directly verified against upstream's real source and, for
+  `is-active`, its real running output — see `docs/cli-compatibility.md`.
 
 ### P2-03 Reconcile app options
 
 Finding: current user configurations can use uwsm `app -p Property=value` and
 `-S out|err|both`, while wsmr exposes incompatible alternatives.
 
-- [ ] Support upstream `-p` property syntax.
-- [ ] Support upstream `-S` silent-output modes.
-- [ ] Keep compatible long spellings as aliases.
-- [ ] Validate duplicate and malformed property values.
-- [ ] Test representative commands from a real Hyprland configuration.
+- [x] Support upstream `-p` property syntax. `-p`/`--property` added
+  (repeatable, `Property=value`), matching upstream's `action="append"`
+  shape exactly.
+- [x] Support upstream `-S` silent-output modes. `-S` short flag added;
+  removed wsmr's incompatible bare-`--silent`-defaults-to-both shape
+  (`num_args = 0..=1`/`default_missing_value`) in favor of upstream's plain
+  required-value flag.
+- [x] Keep compatible long spellings as aliases. `--unit-property` (wsmr's
+  pre-existing long name) kept as an alias for `--property`.
+- [x] Validate duplicate and malformed property values. Malformed-value
+  validation (`Property=value` must contain `=`) was already implemented
+  pre-Phase-2 (`app::launch::resolve`, tested by the pre-existing
+  `resolve_bad_property_errors`) — confirmed this matches upstream's own
+  validation (`app()`, `main.py:3329-3333`, which only checks for `=`, not
+  duplicates); no behavior change needed, just the flag shape.
+- [x] Test representative commands from a real Hyprland configuration. Not
+  literally sourced from this machine's own Hyprland config (which uses
+  `uwsm app`, not `wsmr app`, so there was nothing to extract) — instead
+  verified the corrected flag shapes directly against the live binary (`-p`
+  repeated, `-S` rejecting a bare flag and an invalid value, `-a`/`-e` and
+  `-t`/`-T` and `-g`/`-G` conflict detection) — see the evidence section.
 
 ### P2-04 Resolve remaining silent or incompatible inputs
 
-- [ ] Implement or remove the parsed graphical-session timeout.
-- [ ] Implement removal marks, or reject unsupported values.
-- [ ] Reconcile rung names (`run`/`home` versus `runtime`/`home`) with aliases.
-- [ ] Preserve the `.desktop` suffix in compositor IDs where upstream does.
-- [ ] Audit every clap field to prove it reaches behavior or is rejected.
-- [ ] Document intentional divergences in one compatibility table.
+- [x] Implement or remove the parsed graphical-session timeout. Implemented
+  (see P2-02).
+- [x] Implement removal marks, or reject unsupported values. Implemented:
+  `session::stop::parse_marks` (comma-separated) + `units::plan::mark_of`
+  (classifies a tracked path as a compositor id or `"tweaks"`) filter
+  `plan_remove_all`. Upstream's `generic` mark matches nothing in wsmr — see
+  `docs/coexistence.md`'s rationale, restated in `docs/cli-compatibility.md`.
+- [x] Reconcile rung names (`run`/`home` versus `runtime`/`home`) with aliases.
+  Canonical values are now `run`/`home` (matching upstream exactly, including
+  `$UWSM_UNIT_RUNG` support with the same invalid-value-warns-and-falls-back
+  behavior); `runtime` kept as a value alias.
+- [x] Preserve the `.desktop` suffix in compositor IDs where upstream does.
+  Found and fixed a real bug: `comp::resolve_entry` stripped `.desktop` from
+  `id` via `trim_end_matches`; upstream never does (`CompGlobals.id` is the
+  raw main-argument basename, set *before* entry resolution runs,
+  `main.py:3961`). Confirmed against the live uwsm session's actual unit name
+  (`wayland-wm@hyprland.desktop.service`) — this is what led to checking
+  upstream's source for this bullet in the first place.
+- [x] Audit every clap field to prove it reaches behavior or is rejected.
+  Grepped every field name in `cli.rs` against the rest of the crate; the one
+  field with zero external references (`desktop_names_append`, `start -a`) is
+  intentionally so — its only job, matching upstream's own design, is to
+  exist as an explicit, mutually-exclusive counterpart to `-e` (documented
+  inline in `cli.rs` so a future audit doesn't mistake it for a bug).
+- [x] Document intentional divergences in one compatibility table.
+  `docs/cli-compatibility.md` — covers every subcommand, plus a "known,
+  deliberately deferred divergences" section for things found while reading
+  upstream but out of this phase's named scope (the static-unit deployment
+  model difference, other-rung cleanup on every `start`, `wayland-wm@.service`'s
+  `TimeoutStartSec` not syncing with `$UWSM_WAIT_VARNAMES_TIMEOUT`, the `-v`
+  short flag, and `aux exec`/`aux readiness` accepting a few flags upstream's
+  parser doesn't define for them).
 
 Acceptance criteria:
 
-- [ ] CLI golden tests cover all public commands and relevant aliases.
-- [ ] No accepted option is silently unused.
-- [ ] The installed user's representative uwsm commands parse and behave as
-  intended under wsmr.
+- [!] CLI golden tests cover all public commands and relevant aliases. No
+  golden-file snapshot mechanism was built. Every flag shape was instead
+  verified two ways: (a) directly against upstream's real installed source,
+  and (b) by actually running the built `wsmr` binary with representative
+  invocations (`--help` output, conflict detection, live `is-active`) — see
+  evidence below. This is real verification, but it isn't a *regression-proof
+  snapshot suite*; a future CLI change could silently drift from upstream
+  again without one.
+- [x] No accepted option is silently unused. See the clap-field audit above —
+  every field now either reaches behavior or is the one documented,
+  intentional exception.
+- [~] The installed user's representative uwsm commands parse and behave as
+  intended under wsmr. Verified for the commands this session actually
+  exercised (`start` flag combinations, `app -p`/`-S`, `check is-active`
+  live) — not literally replayed from this machine's own Hyprland
+  configuration's `uwsm` invocations, since that configuration calls `uwsm`,
+  not `wsmr`.
 
 Phase 2 evidence:
 
-- [ ] Compatibility fixture/version:
-- [ ] Parser tests:
-- [ ] Behavior tests:
+- [x] Compatibility fixture/version: uwsm 0.26.7,
+  `/usr/share/uwsm/modules/uwsm/main.py` (installed package on the dev host).
+- [x] Parser tests: `cargo test` — 206 (lib) + 16 (main.rs resolver tests:
+  `resolve_rung_with`, `resolve_tweaks_with`, `str2bool_plus`,
+  `resolve_gst_gate`, `apply_hardcode`) passed, 0 failed, both natively and
+  in the Linux container (`scripts/linux-test.sh`, 222/222). `cargo clippy
+  --all-targets --all-features -- -D warnings` and `cargo fmt --check` clean
+  natively and in-container (`scripts/linux-build.sh`).
+- [x] Behavior tests: ran the built binary directly —
+  `start --help`/`stop --help`/`app --help` show the corrected flags;
+  `-a`/`-e`, `-t`/`-T`, `-g`/`-G` each correctly rejected together;
+  `-U runtime` (alias) parses and reaches the real double-start refusal
+  against the live session; `app -p A=1 -p B=2 --silent` (bare) and
+  `app -S sh` (invalid value) both correctly rejected; `check is-active`
+  verified live (see P2-01). One bug this verification loop itself caught:
+  a new test (`comp::tests::resolve_entry_by_bare_id_keeps_desktop_suffix`)
+  passed natively but failed in the clean container because its fixture used
+  `Exec=Hyprland` — a binary that happens to be installed on *this* dev host
+  but not in the container — a live instance of exactly the host-dependence
+  class of bug Phase 3 exists to catch. Fixed by switching the fixture to
+  `Exec=sh`; both environments pass now.
 
 ---
 
@@ -852,10 +976,14 @@ Phase 7 evidence:
 
 ## Proposed commit sequence
 
-- [ ] `fix!: make unit generation ownership-safe and dry-run pure`
-- [ ] `fix: serialize and atomically persist session environment state`
-- [ ] `fix!: restore uwsm-compatible CLI semantics`
-- [ ] `test: make the unit suite host-independent`
+- [x] `fix!: make unit generation ownership-safe and dry-run pure` — landed
+  combined with the next item as `291ad7b` (Phase 0 + Phase 1 in one commit;
+  see that commit's message for why).
+- [x] `fix: serialize and atomically persist session environment state` —
+  `291ad7b`.
+- [x] `fix!: restore uwsm-compatible CLI semantics` — Phase 2, not yet
+  committed as of writing this line (commit follows this fix-plan update).
+- [x] `test: make the unit suite host-independent` — `3aadc94`.
 - [ ] `test: make Tier-B assertions functional`
 - [ ] `fix: harden desktop-entry and blocking syscall behavior`
 - [ ] `ci: run the Linux integration matrix`
