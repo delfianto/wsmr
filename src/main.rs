@@ -7,13 +7,17 @@
 
 use anyhow::Result;
 use clap::Parser;
+use std::time::Duration;
 use wsmr::cli::{
     AppArgs, AuxAction, AuxArgs, AuxIdArgs, CheckArgs, CheckCmd, Cli, Command, FinalizeArgs,
     Rung as CliRung, StartArgs, StopArgs,
 };
 use wsmr::comp::{CompGlobals, ResolveInput};
 use wsmr::error::{Error, Result as WResult};
-use wsmr::session::{self, start::StartOpts};
+use wsmr::session::{
+    self,
+    start::{GstGate, StartOpts},
+};
 use wsmr::sysd::dbus::SessionBus;
 use wsmr::units::generate::Rung;
 
@@ -31,7 +35,7 @@ fn main() -> Result<()> {
 }
 
 fn start(args: StartArgs) -> WResult<()> {
-    let comp = CompGlobals::resolve(&ResolveInput {
+    let mut comp = CompGlobals::resolve(&ResolveInput {
         wm_cmdline: args.wm_cmdline.clone(),
         desktop_names: split_colon(args.desktop_names.as_deref().unwrap_or_default()),
         desktop_names_exclusive: args.desktop_names_exclusive,
@@ -39,11 +43,13 @@ fn start(args: StartArgs) -> WResult<()> {
         description: args.wm_comment.clone(),
         xdg_current_desktop: split_colon(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default()),
     })?;
+    apply_hardcode(&mut comp, args.hardcode)?;
     let opts = StartOpts {
         only_generate: args.only_generate,
         dry_run: args.dry_run,
-        rung: rung(args.unit_rung),
-        gst_timeout: None, // TODO: wire --gst-* flags
+        rung: resolve_rung(args.unit_rung),
+        gst_gate: resolve_gst_gate(args.gst_warn_seconds, args.gst_abort_seconds),
+        tweaks: resolve_tweaks(args.no_tweaks, args.tweaks),
         bin_path: current_exe()?,
     };
     session::start::run(&comp, &opts)
@@ -53,7 +59,7 @@ fn stop(args: StopArgs) -> WResult<()> {
     session::stop::run_stop(&session::stop::StopOpts {
         dry_run: args.dry_run,
         remove: args.remove,
-        rung: rung(args.unit_rung),
+        rung: resolve_rung(args.unit_rung),
     })
 }
 
@@ -77,7 +83,7 @@ fn app(args: AppArgs) -> WResult<()> {
 fn check(args: CheckArgs) -> WResult<()> {
     match args.what {
         CheckCmd::IsActive(a) => {
-            let active = session::stop::is_active(&SessionBus::connect()?)?;
+            let active = session::stop::is_active_for(&SessionBus::connect()?, a.wm.as_deref())?;
             if a.verbose {
                 println!("{}", if active { "active" } else { "inactive" });
             }
@@ -171,6 +177,123 @@ fn rung(r: CliRung) -> Rung {
     }
 }
 
+/// Resolve the unit rung: the CLI flag if given, else `$UWSM_UNIT_RUNG` (only
+/// `"run"`/`"home"` are honored; anything else warns and falls back), else
+/// `run`. Ports the `unit_rung_default` resolution around `start`'s `-U`
+/// (`main.py:1791-1801`).
+fn resolve_rung(cli: Option<CliRung>) -> Rung {
+    resolve_rung_with(cli, std::env::var("UWSM_UNIT_RUNG").ok())
+}
+
+fn resolve_rung_with(cli: Option<CliRung>, env: Option<String>) -> Rung {
+    if let Some(r) = cli {
+        return rung(r);
+    }
+    match env.as_deref() {
+        Some("run") => Rung::Runtime,
+        Some("home") => Rung::Home,
+        Some(other) => {
+            eprintln!("wsmr: invalid UWSM_UNIT_RUNG value {other:?} ignored, using \"run\".");
+            Rung::Runtime
+        }
+        None => Rung::Runtime,
+    }
+}
+
+/// Resolve whether tweak drop-ins should be generated: `-t`/`-T` if given,
+/// else `$UWSM_TWEAKS` (invalid value warns, falls back to `true`), else the
+/// deprecated `$UWSM_NO_TWEAKS` (warns it's deprecated; invalid value warns,
+/// falls back to `true`), else `true`. Ports the `tweaks_default` resolution
+/// around `start`'s `-t`/`-T` (`main.py:1812-1839`).
+fn resolve_tweaks(no_tweaks_flag: bool, tweaks_flag: bool) -> bool {
+    resolve_tweaks_with(
+        no_tweaks_flag,
+        tweaks_flag,
+        std::env::var("UWSM_TWEAKS").ok(),
+        std::env::var("UWSM_NO_TWEAKS").ok(),
+    )
+}
+
+fn resolve_tweaks_with(
+    no_tweaks_flag: bool,
+    tweaks_flag: bool,
+    t_env: Option<String>,
+    nt_env: Option<String>,
+) -> bool {
+    if tweaks_flag {
+        return true;
+    }
+    if no_tweaks_flag {
+        return false;
+    }
+    if let Some(t) = t_env {
+        return str2bool_plus(&t).unwrap_or_else(|()| {
+            eprintln!("wsmr: invalid UWSM_TWEAKS value {t:?} ignored, using true.");
+            true
+        });
+    }
+    if let Some(nt) = nt_env {
+        eprintln!("wsmr: UWSM_NO_TWEAKS is deprecated and being replaced by UWSM_TWEAKS.");
+        return !str2bool_plus(&nt).unwrap_or_else(|()| {
+            eprintln!("wsmr: invalid UWSM_NO_TWEAKS value {nt:?} ignored, using true.");
+            false
+        });
+    }
+    true
+}
+
+/// `str2bool_plus` (non-numeric mode) from `misc.py:13`: numeric strings
+/// convert via `> 0`; `""`/`"no"`/`"false"`/`"n"` (case-insensitive) are
+/// `false`; `"yes"`/`"true"`/`"y"` are `true`; anything else is rejected.
+fn str2bool_plus(s: &str) -> std::result::Result<bool, ()> {
+    if let Ok(n) = s.parse::<i64>() {
+        return Ok(n > 0);
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "" | "no" | "false" | "n" => Ok(false),
+        "yes" | "true" | "y" => Ok(true),
+        _ => Err(()),
+    }
+}
+
+/// Resolve the system-`graphical.target` gate from `-g`/`-G`: `-G` (abort)
+/// takes precedence over `-g` (warn) whenever it's non-negative; a negative
+/// value disables its own gate. Ports the precedence in `main.py:4715-4720`.
+fn resolve_gst_gate(warn_seconds: i64, abort_seconds: i64) -> GstGate {
+    if abort_seconds >= 0 {
+        GstGate::Abort(Duration::from_secs(abort_seconds as u64))
+    } else if warn_seconds >= 0 {
+        GstGate::Warn(Duration::from_secs(warn_seconds as u64))
+    } else {
+        GstGate::Disabled
+    }
+}
+
+/// `start -F`: canonicalize `comp.cmdline[0]` to an absolute path via `$PATH`
+/// lookup, so the generated unit hardcodes the resolved binary rather than a
+/// bare name it re-resolves at every launch. A no-op if `comp.cmdline[0]` is
+/// already absolute (already-hardcoded implicitly, e.g. the compositor was
+/// given as a path). Ports the `Args.parsed.hardcode` branch of
+/// `fill_comp_globals` (`main.py:4320-4328`).
+fn apply_hardcode(comp: &mut CompGlobals, hardcode: bool) -> WResult<()> {
+    if !hardcode {
+        return Ok(());
+    }
+    let Some(first) = comp.cmdline.first() else {
+        return Ok(());
+    };
+    if first.starts_with('/') {
+        return Ok(());
+    }
+    let resolved = wsmr::util::which(first).ok_or_else(|| {
+        Error::Resolve(format!(
+            "-F/--hardcode was given, but {first:?} was not found on PATH"
+        ))
+    })?;
+    comp.cmdline[0] = resolved.to_string_lossy().into_owned();
+    Ok(())
+}
+
 fn split_colon(s: &str) -> Vec<String> {
     if s.is_empty() {
         Vec::new()
@@ -184,4 +307,162 @@ fn current_exe() -> WResult<String> {
         .map_err(|e| Error::io("current_exe", e))?
         .to_string_lossy()
         .into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_rung_cli_wins_over_env() {
+        assert_eq!(
+            resolve_rung_with(Some(CliRung::Home), Some("run".into())),
+            Rung::Home
+        );
+    }
+
+    #[test]
+    fn resolve_rung_env_run_and_home() {
+        assert_eq!(resolve_rung_with(None, Some("run".into())), Rung::Runtime);
+        assert_eq!(resolve_rung_with(None, Some("home".into())), Rung::Home);
+    }
+
+    #[test]
+    fn resolve_rung_invalid_env_warns_and_falls_back_to_run() {
+        // "runtime" is a valid *CLI* alias but not a valid *env var* value
+        // upstream would accept — matches main.py's exact env validation.
+        assert_eq!(
+            resolve_rung_with(None, Some("runtime".into())),
+            Rung::Runtime
+        );
+        assert_eq!(resolve_rung_with(None, Some("bogus".into())), Rung::Runtime);
+    }
+
+    #[test]
+    fn resolve_rung_no_cli_no_env_defaults_to_run() {
+        assert_eq!(resolve_rung_with(None, None), Rung::Runtime);
+    }
+
+    #[test]
+    fn str2bool_plus_cases() {
+        assert_eq!(str2bool_plus("yes"), Ok(true));
+        assert_eq!(str2bool_plus("Y"), Ok(true));
+        assert_eq!(str2bool_plus("true"), Ok(true));
+        assert_eq!(str2bool_plus("no"), Ok(false));
+        assert_eq!(str2bool_plus("False"), Ok(false));
+        assert_eq!(str2bool_plus(""), Ok(false));
+        assert_eq!(str2bool_plus("0"), Ok(false));
+        assert_eq!(str2bool_plus("5"), Ok(true));
+        assert_eq!(str2bool_plus("-1"), Ok(false));
+        assert_eq!(str2bool_plus("banana"), Err(()));
+    }
+
+    #[test]
+    fn resolve_tweaks_flags_win_over_env() {
+        assert!(resolve_tweaks_with(false, true, Some("false".into()), None));
+        assert!(!resolve_tweaks_with(true, false, Some("true".into()), None));
+    }
+
+    #[test]
+    fn resolve_tweaks_reads_uwsm_tweaks() {
+        assert!(resolve_tweaks_with(false, false, Some("true".into()), None));
+        assert!(!resolve_tweaks_with(
+            false,
+            false,
+            Some("false".into()),
+            None
+        ));
+        // invalid value falls back to true (with a warning, not asserted here)
+        assert!(resolve_tweaks_with(
+            false,
+            false,
+            Some("bogus".into()),
+            None
+        ));
+    }
+
+    #[test]
+    fn resolve_tweaks_falls_back_to_deprecated_uwsm_no_tweaks() {
+        assert!(!resolve_tweaks_with(
+            false,
+            false,
+            None,
+            Some("true".into())
+        ));
+        assert!(resolve_tweaks_with(
+            false,
+            false,
+            None,
+            Some("false".into())
+        ));
+    }
+
+    #[test]
+    fn resolve_tweaks_default_is_true() {
+        assert!(resolve_tweaks_with(false, false, None, None));
+    }
+
+    #[test]
+    fn resolve_gst_gate_abort_takes_precedence() {
+        assert_eq!(
+            resolve_gst_gate(60, 10),
+            GstGate::Abort(Duration::from_secs(10))
+        );
+    }
+
+    #[test]
+    fn resolve_gst_gate_warn_when_no_abort() {
+        assert_eq!(
+            resolve_gst_gate(60, -1),
+            GstGate::Warn(Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn resolve_gst_gate_disabled_when_both_negative() {
+        assert_eq!(resolve_gst_gate(-1, -1), GstGate::Disabled);
+    }
+
+    fn comp(cmdline: &[&str]) -> CompGlobals {
+        CompGlobals {
+            cmdline: cmdline.iter().map(|s| s.to_string()).collect(),
+            id: "x".into(),
+            id_unit_string: "x".into(),
+            bin_name: "x".into(),
+            bin_id: "x".into(),
+            desktop_names: vec!["x".into()],
+            name: None,
+            description: None,
+            cli_desktop_names: vec![],
+            cli_desktop_names_exclusive: false,
+        }
+    }
+
+    #[test]
+    fn apply_hardcode_noop_when_disabled() {
+        let mut c = comp(&["sh"]);
+        apply_hardcode(&mut c, false).unwrap();
+        assert_eq!(c.cmdline[0], "sh");
+    }
+
+    #[test]
+    fn apply_hardcode_noop_when_already_absolute() {
+        let mut c = comp(&["/bin/sh", "-c", "true"]);
+        apply_hardcode(&mut c, true).unwrap();
+        assert_eq!(c.cmdline[0], "/bin/sh");
+    }
+
+    #[test]
+    fn apply_hardcode_resolves_via_path() {
+        let mut c = comp(&["sh"]);
+        apply_hardcode(&mut c, true).unwrap();
+        assert!(c.cmdline[0].starts_with('/'));
+        assert!(c.cmdline[0].ends_with("/sh"));
+    }
+
+    #[test]
+    fn apply_hardcode_errors_when_not_found() {
+        let mut c = comp(&["definitely-not-a-real-binary-xyz"]);
+        assert!(apply_hardcode(&mut c, true).is_err());
+    }
 }

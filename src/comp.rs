@@ -190,8 +190,13 @@ fn resolve_entry(input: &ResolveInput, main: &MainArg, entry_id: &str) -> Result
     let mut cmdline = entry.exec(action)?;
     cmdline.extend(input.wm_cmdline.iter().skip(1).cloned());
 
-    // id = the entry's filename stem (units become wayland-wm@<id>)
-    let id = entry_id.trim_end_matches(".desktop").to_string();
+    // id = the entry id verbatim, `.desktop` suffix and all (units become
+    // wayland-wm@<id>) — upstream never strips it here either: CompGlobals.id
+    // is set to the raw main-argument basename *before* entry resolution even
+    // runs (`main.py:3961`), so a `foo.desktop` argument keeps that literal
+    // id. Confirmed live against a running uwsm session: its compositor
+    // unit is `wayland-wm@hyprland.desktop.service`, not `wayland-wm@hyprland...`.
+    let id = entry_id.to_string();
     if !is_wm_id(&id) {
         return Err(Error::Resolve(format!(
             "\"{id}\" is not a valid compositor id"
@@ -406,6 +411,41 @@ mod tests {
     }
 
     #[test]
+    fn resolve_entry_by_bare_id_keeps_desktop_suffix() {
+        use crate::testutil::{NO_XDG_DIRS, with_env};
+        let root = std::env::temp_dir().join(format!("wsmr-comp-bare-{}", std::process::id()));
+        let sessions = root.join("wayland-sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        // Exec must resolve on PATH for check_basic() to pass; use `sh` (present
+        // on every dev host/container) rather than a real compositor binary
+        // that happens to be installed on the box this was written on.
+        std::fs::write(
+            sessions.join("hyprland.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Hyprland\nExec=sh\n",
+        )
+        .unwrap();
+
+        with_env(
+            &[
+                ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
+                ("XDG_DATA_DIRS", Some(NO_XDG_DIRS)),
+            ],
+            || {
+                let input = ResolveInput {
+                    wm_cmdline: vec!["hyprland.desktop".into()],
+                    ..Default::default()
+                };
+                let cg = CompGlobals::resolve(&input).unwrap();
+                // matches the real unit name observed on a live uwsm session:
+                // wayland-wm@hyprland.desktop.service, not @hyprland.service.
+                assert_eq!(cg.id, "hyprland.desktop");
+                assert_eq!(cg.id_unit_string, "hyprland.desktop");
+            },
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn resolve_entry_by_path() {
         // a path to a wayland-sessions entry is loaded directly
         let dir = std::env::temp_dir().join(format!("wsmr-comp-{}", std::process::id()));
@@ -422,7 +462,11 @@ mod tests {
             ..Default::default()
         };
         let cg = CompGlobals::resolve(&input).unwrap();
-        assert_eq!(cg.id, "mycomp");
+        // upstream keeps the `.desktop` suffix in `id` (it's just the raw
+        // main-argument basename, taken before entry resolution even runs)
+        // — confirmed live against a running uwsm session's
+        // `wayland-wm@hyprland.desktop.service` unit.
+        assert_eq!(cg.id, "mycomp.desktop");
         assert_eq!(cg.cmdline, vec!["sh", "--debug"]); // Exec + trailing CLI arg
         assert_eq!(cg.bin_name, "sh");
         assert_eq!(cg.name.as_deref(), Some("My Comp"));
