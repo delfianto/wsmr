@@ -290,7 +290,7 @@ fn apply_hardcode(comp: &mut CompGlobals, hardcode: bool) -> WResult<()> {
             "-F/--hardcode was given, but {first:?} was not found on PATH"
         ))
     })?;
-    comp.cmdline[0] = resolved.to_string_lossy().into_owned();
+    comp.cmdline[0] = path_to_unit_string(&resolved, "the resolved -F/--hardcode executable")?;
     Ok(())
 }
 
@@ -303,15 +303,48 @@ fn split_colon(s: &str) -> Vec<String> {
 }
 
 fn current_exe() -> WResult<String> {
-    Ok(std::env::current_exe()
-        .map_err(|e| Error::io("current_exe", e))?
-        .to_string_lossy()
-        .into_owned())
+    let path = std::env::current_exe().map_err(|e| Error::io("current_exe", e))?;
+    path_to_unit_string(&path, "the wsmr executable's own path")
+}
+
+/// Convert `path` to a `String` for embedding in a generated unit file
+/// (`ExecStart=`, etc.), rejecting it outright rather than silently
+/// mangling it if it isn't valid UTF-8 (P5-05). systemd unit files are
+/// themselves UTF-8 text, so a lossy conversion here wouldn't just be
+/// imprecise — it would write a *different*, likely nonexistent path into
+/// the unit, which then silently fails to exec instead of failing here with
+/// a clear cause.
+fn path_to_unit_string(path: &std::path::Path, what: &str) -> WResult<String> {
+    path.to_str().map(str::to_string).ok_or_else(|| {
+        Error::InvalidArg(format!(
+            "{what} is not valid UTF-8 and cannot be represented in a systemd unit file: {path:?}"
+        ))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_to_unit_string_passes_through_valid_utf8() {
+        assert_eq!(
+            path_to_unit_string(std::path::Path::new("/usr/bin/sway"), "x").unwrap(),
+            "/usr/bin/sway"
+        );
+    }
+
+    #[test]
+    fn path_to_unit_string_rejects_non_utf8() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        // 0xFF is not valid UTF-8 in any position.
+        let bytes = [b'/', b'x', b'/', 0xFFu8, b'y'];
+        let path = std::path::Path::new(OsStr::from_bytes(&bytes));
+        let err = path_to_unit_string(path, "the thing").unwrap_err();
+        assert!(err.to_string().contains("the thing"));
+        assert!(err.to_string().contains("not valid UTF-8"));
+    }
 
     #[test]
     fn resolve_rung_cli_wins_over_env() {

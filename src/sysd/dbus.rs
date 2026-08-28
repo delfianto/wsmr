@@ -357,12 +357,28 @@ impl SessionBus {
         Ok(units.into_iter().next().map(|u| u.name))
     }
 
-    /// Wait until the job queue no longer contains `job` (poll). Used after
-    /// `reload`/`stop_unit`.
-    pub fn wait_for_job(&self, job: &OwnedObjectPath) -> Result<()> {
+    /// Wait until the job queue no longer contains `job` (poll), or `timeout`
+    /// elapses. Used after `reload`/`stop_unit`. `unit` is only for the
+    /// timeout error message (systemd job objects don't carry the unit name
+    /// back). Bounded deliberately (P5-04): neither systemd nor upstream's
+    /// own equivalent wait (`main.py:4394`, itself unbounded) guarantees a
+    /// job is ever removed from the queue — a stuck job must not hang the
+    /// caller forever.
+    ///
+    /// This polls `ListJobs` rather than subscribing to systemd's
+    /// `JobRemoved` signal; the latter would be preferable but needs
+    /// zbus's async signal-stream API, which nothing else in this
+    /// (deliberately blocking-only) crate uses yet.
+    pub fn wait_for_job(&self, job: &OwnedObjectPath, unit: &str, timeout: Duration) -> Result<()> {
+        let start = Instant::now();
         loop {
             if !self.list_jobs()?.iter().any(|j| &j.job_path == job) {
                 return Ok(());
+            }
+            if start.elapsed() >= timeout {
+                return Err(Error::Resolve(format!(
+                    "timed out after {timeout:?} waiting for {unit}'s systemd job to complete"
+                )));
             }
             sleep(Duration::from_millis(100));
         }
@@ -454,8 +470,11 @@ impl SystemBus {
     fn unit_active_state(&self, unit: &str) -> Result<Option<String>> {
         let path = match self.systemd()?.get_unit(unit) {
             Ok(p) => p,
-            // unit not loaded yet → treat as not-active
-            Err(_) => return Ok(None),
+            // Genuinely absent unit → not-active. Anything else (a D-Bus
+            // transport/auth failure, say) is a real error and must be
+            // propagated, not silently read as "not active" (P5-05).
+            Err(e) if is_no_such_unit(&e) => return Ok(None),
+            Err(e) => return Err(e.into()),
         };
         let u = SystemdUnitProxyBlocking::builder(&self.conn)
             .path(path)?
@@ -480,6 +499,14 @@ impl SystemBus {
             sleep(Duration::from_millis(500));
         }
     }
+}
+
+/// Whether `e` is systemd's own "no such unit" application error
+/// (`org.freedesktop.systemd1.NoSuchUnit`), as opposed to a D-Bus transport
+/// or authentication failure that happens to occur on the same call. Only
+/// the former is safe to read as "the unit doesn't exist" (P5-05).
+fn is_no_such_unit(e: &zbus::Error) -> bool {
+    matches!(e, zbus::Error::MethodError(name, ..) if name.as_str() == "org.freedesktop.systemd1.NoSuchUnit")
 }
 
 /// Extract the compositor id from a `wayland-wm@<id>.service` unit name.
