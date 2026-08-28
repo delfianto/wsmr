@@ -45,15 +45,16 @@ verification command or evidence in the phase's evidence section.
 - Host: CachyOS, Wayland, Hyprland 0.56.2, systemd 261, dbus-broker.
 - The active desktop is managed by uwsm 0.26.7, not wsmr.
 - Formatting, clippy, and build checks pass.
-- Unit tests currently report **233 passing, 0 failing** (215 lib + 18 in the
-  `wsmr` binary's own test target) — the 3 originally pre-existing
-  host-dependent failures were root-caused and fixed in Phase 3 (an
-  XDG-dirs test-isolation bug and a hardcoded system-bus dependency). Was
-  166/3 before Phase 0. Verified in both the native CachyOS host and the
-  clean Linux container after every phase, including Phase 2, where the
-  container caught a genuinely new host-dependence bug this session
-  introduced (see Phase 2 evidence) — the two-environment habit paid for
-  itself.
+- Unit tests currently report **234 passing, 0 failing** (215 lib + 18 in the
+  `wsmr` binary's own test target + 1 new integration test comparing
+  generated units against a real uwsm 0.26.7 install, Phase 6) — the 3
+  originally pre-existing host-dependent failures were root-caused and fixed
+  in Phase 3 (an XDG-dirs test-isolation bug and a hardcoded system-bus
+  dependency). Was 166/3 before Phase 0. Verified in both the native CachyOS
+  host and the clean Linux container after every phase, including Phase 2,
+  where the container caught a genuinely new host-dependence bug this
+  session introduced (see Phase 2 evidence) — the two-environment habit paid
+  for itself.
 - The Tier-B smoke reaches the core lifecycle, but ignores failures in terminal
   launch and finalization and therefore can report a false success.
 - wsmr and uwsm currently use the same unit namespace. Phase 0's file-level
@@ -1004,42 +1005,133 @@ Phase 5 evidence:
 
 Finding: `Cargo.toml`, README, and repository guidance disagree on Rust/MSRV.
 
-- [ ] Test the proposed MSRV with the locked dependency graph.
-- [ ] Choose and document one supported MSRV.
-- [ ] Enforce it in CI.
-- [ ] Align `Cargo.toml`, README, and repository guidance.
+- [x] Test the proposed MSRV with the locked dependency graph. The dev host's
+  installed toolchain (`rustc 1.98.0`) already *is* `Cargo.toml`'s
+  `rust-version`, so every native `cargo build`/`cargo test`/`cargo clippy`
+  run across this entire session (dozens of them, every phase) was already
+  real, direct verification at the declared floor — not just a plausible
+  claim. Re-confirmed explicitly with `cargo build --all-targets --locked`
+  and `cargo test --all-targets --locked` (see evidence).
+- [x] Choose and document one supported MSRV. **1.98.0** — this was the
+  user's own most recent commit (`69914cd`, the day before this session),
+  which added `rust-version = "1.98.0"` to `Cargo.toml` for the first time
+  alongside a routine dependency bump. Treated as the authoritative, already-
+  made decision; the job here was aligning everything else to it, not
+  re-deciding it.
+- [x] Enforce it in CI. New `msrv` job in `.github/workflows/ci.yml`: reads
+  `rust-version` out of `Cargo.toml` itself (so the two can't drift apart —
+  no second hardcoded version number to forget), pins `dtolnay/rust-toolchain`
+  to exactly that, and runs `cargo build`/`cargo test --all-targets --locked`.
+  **Caveat, stated plainly:** this workflow could not be executed from this
+  environment — no way to trigger or observe a real GitHub Actions run here.
+  It's syntax-validated (`python3 -c "import yaml; yaml.safe_load(...)"`,
+  clean) and its `sed` MSRV-extraction line was run directly against the
+  real `Cargo.toml` (correctly prints `1.98.0`), and the build/test commands
+  it runs are the exact ones verified locally above — but "added and as
+  carefully checked as possible from here" is not the same as "confirmed
+  green on GitHub's infrastructure." Worth an actual CI run before trusting
+  it blindly.
+- [x] Align `Cargo.toml`, README, and repository guidance. `Cargo.toml` was
+  already correct (the source of truth). Fixed README.md ("rustc ≥ 1.85;
+  developed on 1.95" → "rustc ≥ 1.98.0 ... enforced by CI's MSRV job") and
+  `AGENTS.md`/`CLAUDE.md` (same fix, plus its `thiserror`/`anyhow` "likely
+  choices" wording, since both are long-since actual, not hypothetical,
+  choices).
 
 ### P6-02 Add an integration matrix
 
-- [ ] Retain a baseline oldest-supported systemd image.
-- [ ] Add a current-systemd image using dbus-broker.
-- [ ] Run functional Tier B in CI where privileged/rootful containers are
-  supported.
-- [ ] If hosted CI cannot support it reliably, add scheduled/manual execution
+- [!] Retain a baseline oldest-supported systemd image / add a current-systemd
+  image using dbus-broker. Not done — deliberately deferred, not
+  overlooked: this is about the *local* Podman Tier-B harness
+  (`Containerfile.systemd`), and Tier B itself is still known to ignore real
+  failures (`fix-plan.md` Phase 4, not yet done). Building out a multi-image
+  systemd matrix for a test that can currently report false positives would
+  just multiply the false confidence, not reduce it. Revisit after Phase 4.
+- [!] Run functional Tier B in CI where privileged/rootful containers are
+  supported. Not done, same reason — Tier B needs Phase 4's hardening
+  *before* it's trustworthy enough to gate anything on, in CI or otherwise.
+  Wiring a known-unreliable test into CI now would be the exact failure mode
+  this whole review exists to fix.
+- [x] If hosted CI cannot support it reliably, add scheduled/manual execution
   and publish its status/artifacts without claiming per-commit coverage.
-- [ ] Add a normalized generated-unit regression comparison against uwsm 0.26.7.
+  Interpreted "cannot support it reliably" as also covering "the test itself
+  isn't reliable yet" (Phase 4's job) — so the honest move here *is* this
+  bullet: README and `AGENTS.md` now both say plainly that Tier B is
+  local-only, not run in CI, and not full functional coverage until Phase 4
+  lands. No new scheduled/manual workflow was added for it, since standing
+  one up for a test that can false-positive would itself misrepresent status
+  — the documentation fix *is* the honest version of "publish status without
+  claiming coverage" available right now.
+- [x] Add a normalized generated-unit regression comparison against uwsm
+  0.26.7. New `tests/uwsm_unit_compat.rs`: all 13 of wsmr's static graph
+  units (`units::templates::GRAPH`), rendered with uwsm's own
+  bin_name/bin_path, asserted **byte-for-byte identical** to uwsm 0.26.7's
+  real, package-shipped unit files (captured programmatically from
+  `/usr/lib/systemd/user/*` on this host, not retyped by hand — eliminates
+  transcription-error risk). This is genuine, passing, durable regression
+  coverage for a claim (`templates.rs`'s own doc comment: "kept byte-identical
+  to upstream") that was previously never actually checked against a real
+  uwsm install anywhere in the test suite.
 
 ### P6-03 Align documentation with reality
 
-- [ ] Correct thin versus fat LTO claims.
-- [ ] Describe which checks actually run in CI.
-- [ ] Update stale statements that Tier B is merely “next.”
-- [ ] Document the compatibility target and known divergences.
-- [ ] Clearly distinguish macOS unit/build verification, Linux Tier A, systemd
-  Tier B, and real compositor testing.
-- [ ] Do not claim merged coverage is gated in CI until it is.
+- [x] Correct thin versus fat LTO claims. Fixed in both README.md and
+  `AGENTS.md` — both said "fat LTO"; `Cargo.toml` has said `lto = "thin"`
+  since commit `313b1d4` ("Use thin LTO for release builds"), months before
+  this session. Added the commit's own rationale (build-time/`target/` size
+  cost not worth it) to both.
+- [x] Describe which checks actually run in CI. README.md now states exactly
+  what `ci.yml` runs (format-check, lint, build, test, plus the new MSRV
+  job) and exactly what doesn't (coverage, Tier A, Tier B — all local-only).
+- [x] Update stale statements that Tier B is merely "next." Fixed in
+  `AGENTS.md` — Tier B has existed for a while now (it's what Phase 4 is
+  hardening); "is next" was describing a state the project was already past.
+- [x] Document the compatibility target and known divergences.
+  `docs/cli-compatibility.md` (Phase 2) and `docs/coexistence.md` (Phase 0)
+  already exist; this phase's actual gap was that nothing linked to them —
+  README.md and `AGENTS.md` both do now.
+- [x] Clearly distinguish macOS unit/build verification, Linux Tier A,
+  systemd Tier B, and real compositor testing. Already reasonably clear in
+  the pre-existing README/AGENTS.md structure (separate sections per tier);
+  the fixes here were about *accuracy within* that existing structure (CI
+  claims, Tier B caveats), not the structure itself, which didn't need
+  rework.
+- [x] Do not claim merged coverage is gated in CI until it is. Audited: it
+  never was — `ci.yml` has no coverage step at all, and neither README nor
+  `AGENTS.md`'s coverage sections claimed CI enforcement (they described
+  `just coverage` as *the local, authoritative* gate, which is accurate).
+  README's "Development & testing" section now says this explicitly rather
+  than leaving it to be inferred correctly.
 
 Acceptance criteria:
 
-- [ ] A new contributor can reproduce every advertised verification tier.
-- [ ] Badges and README claims match workflow definitions.
-- [ ] The selected MSRV job passes from a clean checkout.
+- [~] A new contributor can reproduce every advertised verification tier.
+  Every tier's exact command is now documented (README + `AGENTS.md`) and
+  every command shown was actually run this session except triggering the
+  new CI workflow itself (can't, from here — see P6-01's caveat).
+- [x] Badges and README claims match workflow definitions. The one existing
+  badge (`ci.yml`) matches; README's CI-behavior claims were rewritten to
+  match `ci.yml`'s real steps line-for-line rather than paraphrasing from
+  memory.
+- [~] The selected MSRV job passes from a clean checkout. Passes *locally*
+  at the pinned version (this host's toolchain already is 1.98.0); the
+  actual GitHub Actions job has not been run — see P6-01.
 
 Phase 6 evidence:
 
-- [ ] MSRV decision and command:
-- [ ] CI workflow run:
-- [ ] Documentation review:
+- [x] MSRV decision and command: **1.98.0**, `Cargo.toml`'s `rust-version`
+  (see P6-01). `cargo build --all-targets --locked --verbose` and
+  `cargo test --all-targets --locked` — both pass on `rustc 1.98.0`
+  natively and in the Linux container.
+- [~] CI workflow run: not obtained — no GitHub Actions access from this
+  environment. YAML syntax validated locally; the underlying commands
+  verified locally instead (see above). A real push/PR run is still needed
+  before trusting the new `msrv` job.
+- [x] Documentation review: README.md and `AGENTS.md` (=`CLAUDE.md`) both
+  updated; `cargo test` — 234 passed (215 lib + 18 main.rs + 1 new
+  integration test, `tests/uwsm_unit_compat.rs`), 0 failed, natively and in
+  the Linux container (`scripts/linux-test.sh`). `cargo clippy --all-targets
+  --all-features -- -D warnings` and `cargo fmt --check` clean in both.
 
 ---
 
@@ -1144,7 +1236,9 @@ Phase 7 evidence:
   not yet committed as of writing this line (commit follows this fix-plan
   update).
 - [ ] `ci: run the Linux integration matrix`
-- [ ] `docs: align support, compatibility, and verification claims`
+- [x] `docs: align support, compatibility, and verification claims` — Phase
+  6, not yet committed as of writing this line (commit follows this
+  fix-plan update).
 - [ ] `test: add the disposable-user Hyprland live harness`
 
 ## Final definition of done

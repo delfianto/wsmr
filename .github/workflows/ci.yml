@@ -1,5 +1,5 @@
 # CI for justfile-rust baseline. Source of truth: delfianto/ci-rust + JUST.md
-# Gates: format --check-only · lint · cargo build --all-targets · test
+# Gates: format --check-only · lint · cargo build --all-targets · test · MSRV
 
 name: ci
 
@@ -44,3 +44,36 @@ jobs:
 
       - name: test
         run: just test
+
+  msrv:
+    name: msrv (rust-version from Cargo.toml)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Single source of truth: read the floor from Cargo.toml itself rather
+      # than duplicating the version number in this workflow, so the two
+      # can't silently drift apart (fix-plan.md P6-01).
+      - name: Read MSRV from Cargo.toml
+        id: msrv
+        run: |
+          version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ -z "$version" ]; then
+            echo "::error::could not read rust-version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv
+
+      - name: build (pinned to MSRV, locked dependency graph)
+        run: cargo build --all-targets --locked --verbose
+
+      - name: test (pinned to MSRV, locked dependency graph)
+        run: cargo test --all-targets --locked
