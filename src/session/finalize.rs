@@ -1,10 +1,9 @@
 //! `finalize`: export variables to the activation environments and signal
 //! readiness. Ports `finalize` (`main.py:2424`). See `REFERENCE.md` §4.2.
 
-use crate::env::files;
 use crate::error::{Error, Result};
 use crate::filter;
-use crate::session::runtime_path;
+use crate::session::state;
 use crate::sysd::dbus::SessionBus;
 use std::collections::BTreeMap;
 use std::os::unix::process::CommandExt;
@@ -36,7 +35,10 @@ pub fn finalize(extra_vars: &[String]) -> Result<()> {
         }
     }
 
-    files::append_cleanup(&runtime_path("env_cleanup.list")?, export.keys().cloned())?;
+    // Record the cleanup obligation before exporting — see the matching
+    // comment in `session::exec::readiness_watch` for why that order, not
+    // the reverse, is the safe one.
+    state::append_cleanup(export.keys().cloned())?;
     bus.set_systemd_vars(&export)?;
 
     // If the compositor unit is still activating, declare ready; otherwise just

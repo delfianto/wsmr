@@ -7,7 +7,7 @@
 // The D-Bus `Notify` method legitimately takes many parameters.
 #![allow(clippy::too_many_arguments)]
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::filter;
 use std::collections::{BTreeMap, HashMap};
 use std::thread::sleep;
@@ -234,25 +234,60 @@ impl SessionBus {
 
     /// Export variables to the systemd (and, for classic dbus-daemon, the D-Bus)
     /// activation environment. Ports `set_systemd_vars` (`main.py:917`).
+    ///
+    /// **Ordering:** systemd is updated first, D-Bus second. systemd's
+    /// activation environment is what almost everything downstream actually
+    /// reads (`EnvironmentFile=`, unit activation, …), so a failure here
+    /// leaves nothing applied at all; if the D-Bus step then fails, systemd
+    /// is already correct and only the secondary D-Bus copy is left stale —
+    /// reported as [`Error::PartialEnvUpdate`] so the caller knows exactly
+    /// which side needs a retry.
     pub fn set_systemd_vars(&self, vars: &BTreeMap<String, String>) -> Result<()> {
         let assignments: Vec<String> = vars.iter().map(|(k, v)| format!("{k}={v}")).collect();
         self.manager()?.set_environment(assignments)?;
         if !self.is_dbus_broker()? {
             let map: HashMap<String, String> = vars.clone().into_iter().collect();
-            self.dbus()?.update_activation_environment(map)?;
+            self.dbus()?
+                .update_activation_environment(map)
+                .map_err(|source| Error::PartialEnvUpdate {
+                    operation: "set",
+                    applied: "systemd",
+                    failed: "the D-Bus daemon",
+                    source: Box::new(source),
+                })?;
         }
         Ok(())
     }
 
     /// Unset variables from the systemd (and, for classic dbus-daemon, the
     /// D-Bus) activation environment. Ports `unset_systemd_vars` (`main.py:977`).
+    ///
+    /// **Ordering:** the mirror image of [`Self::set_systemd_vars`] — D-Bus
+    /// is cleared first, systemd second, so that if the systemd step fails,
+    /// the variable is left *present* on the side almost everything reads
+    /// rather than prematurely gone from it. Reported as
+    /// [`Error::PartialEnvUpdate`] when the D-Bus step had already succeeded.
     pub fn unset_systemd_vars(&self, names: &[String]) -> Result<()> {
-        if !self.is_dbus_broker()? {
+        let dbus_already_cleared = !self.is_dbus_broker()?;
+        if dbus_already_cleared {
             let map: HashMap<String, String> =
                 names.iter().map(|n| (n.clone(), String::new())).collect();
             self.dbus()?.update_activation_environment(map)?;
         }
-        self.manager()?.unset_environment(names.to_vec())?;
+        self.manager()?
+            .unset_environment(names.to_vec())
+            .map_err(|source| {
+                if dbus_already_cleared {
+                    Error::PartialEnvUpdate {
+                        operation: "unset",
+                        applied: "the D-Bus daemon",
+                        failed: "systemd",
+                        source: Box::new(source),
+                    }
+                } else {
+                    Error::Dbus(source)
+                }
+            })?;
         Ok(())
     }
 

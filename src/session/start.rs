@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 use crate::session::{helpers, runtime_path};
 use crate::sysd::dbus::{SessionBus, SystemBus};
 use crate::units::generate::{self, GenOutcome, Rung};
+use crate::units::plan::{GenerationPlan, plan_generate};
 use crate::units::templates::{DropinInput, RenderCtx};
 use crate::varnames;
 use std::collections::BTreeMap;
@@ -34,8 +35,14 @@ pub struct StartOpts {
 }
 
 /// Run the start flow for `comp`.
+///
+/// Ordering is safety-critical (P0-01/P0-02): every read-only eligibility
+/// check — the system-target gate, the double-start refusal, and computing
+/// the generation plan — runs to completion *before* anything on disk or in
+/// the systemd user manager is touched. A refusal (already active, or a plan
+/// conflict) or `--dry-run` therefore never generates, writes, or reloads.
 pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
-    // (1) optional system graphical.target gate
+    // (1) optional system graphical.target gate (read-only)
     if let Some(timeout) = opts.gst_timeout {
         let sysbus = SystemBus::connect()?;
         if !sysbus.wait_for_unit("graphical.target", &["active", "activating"], timeout)? {
@@ -45,41 +52,48 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
         }
     }
 
-    // (2) generate units + per-compositor drop-ins
+    // (2) refuse double start (read-only) before generating or reloading
+    // anything.
+    let bus = SessionBus::connect()?;
+    refuse_if_active(crate::session::stop::is_active(&bus)?)?;
+
+    // (3) compute the generation plan (read-only: stats/reads existing files
+    // and the ownership manifest, never writes).
     let dir = generate::rung_dir(opts.rung)?;
     let ctx = RenderCtx {
         bin_name: "wsmr".into(),
         bin_path: opts.bin_path.clone(),
         waitpid_bin: "waitpid".into(),
     };
-    let outcome = generate::generate(&dir, &ctx, &build_dropins(comp, &opts.bin_path))?;
+    let plan = plan_generate(&dir, &ctx, &build_dropins(comp, &opts.bin_path))?;
+
+    // Dry-run always reports the full plan — including any conflicts — before
+    // any error is raised, so `--dry-run` is a strict superset of what a real
+    // run would tell you, never less informative because it would have failed.
+    if opts.dry_run {
+        report_plan(&dir, &plan);
+    }
+    if !plan.conflicts.is_empty() {
+        return Err(generate::conflict_error(&dir, &plan.conflicts));
+    }
+    if opts.dry_run {
+        println!("Dry run: would start {}.", comp.id);
+        return Ok(());
+    }
+
+    // (4) apply the plan for real, then reload only if it actually changed
+    // something.
+    let outcome = generate::apply_generate(&dir, plan)?;
+    if outcome.changed {
+        bus.reload()?;
+    }
 
     if opts.only_generate {
         report(&dir, &outcome);
         return Ok(());
     }
 
-    let bus = SessionBus::connect()?;
-    if outcome.changed {
-        bus.reload()?;
-    }
-
-    // (3) refuse double start
-    if !bus
-        .list_units_by_patterns(&["active", "activating"], &["wayland-wm@*.service"])?
-        .is_empty()
-    {
-        return Err(Error::Resolve(
-            "a compositor or graphical session is already active".into(),
-        ));
-    }
-
-    if opts.dry_run {
-        println!("Dry run: would start {}.", comp.id);
-        return Ok(());
-    }
-
-    // (4) bind the graphical session to our PID
+    // (5) bind the graphical session to our PID
     let pid = std::process::id();
     let status = Command::new("systemctl")
         .args([
@@ -93,10 +107,10 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
         return Err(Error::Resolve("failed to start the bindpid unit".into()));
     }
 
-    // (5) snapshot login environment for the preloader + units
+    // (6) snapshot login environment for the preloader + units
     save_login_envs()?;
 
-    // (6) become the session anchor: preserve real stdout/stderr on fd 3/4, then
+    // (7) become the session anchor: preserve real stdout/stderr on fd 3/4, then
     // replace ourselves with systemd-cat -> sh signal-handler.sh <envelope>
     let script = helpers::extract("signal-handler.sh")?;
     // SAFETY: duplicate std fds to 3/4 so the shell handler can message past
@@ -118,6 +132,40 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
     crate::coverage::flush_before_exec();
     let err = cmd.exec();
     Err(Error::io("systemd-cat", err))
+}
+
+/// Pure refusal check, split out from [`run`] so it's unit-testable without a
+/// live session bus: `already_active` is whatever the caller determined by
+/// querying systemd (see [`crate::session::stop::is_active`]).
+fn refuse_if_active(already_active: bool) -> Result<()> {
+    if already_active {
+        return Err(Error::Resolve(
+            "a compositor or graphical session is already active".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn report_plan(dir: &Path, plan: &GenerationPlan) {
+    println!("Dry run: units in {}", dir.display());
+    if plan.is_empty() && plan.conflicts.is_empty() {
+        println!("  (unchanged)");
+        return;
+    }
+    for w in &plan.writes {
+        println!("  + {}", w.relname);
+    }
+    for r in &plan.removes {
+        println!("  - {}", r.relname);
+    }
+    for c in &plan.conflicts {
+        println!("  ! {} (blocked \u{2014} {})", c.relname, c.reason);
+    }
+    if !plan.conflicts.is_empty() {
+        println!("  would refuse: paths above are not verifiably owned by wsmr");
+    } else if !plan.is_empty() {
+        println!("  (would reload the systemd user manager)");
+    }
 }
 
 fn build_dropins(comp: &CompGlobals, bin_path: &str) -> DropinInput {
@@ -172,6 +220,13 @@ fn report(dir: &Path, outcome: &GenOutcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refuse_if_active_blocks_only_when_active() {
+        assert!(refuse_if_active(false).is_ok());
+        let err = refuse_if_active(true).unwrap_err();
+        assert!(err.to_string().contains("already active"));
+    }
 
     #[test]
     fn build_dropins_maps_comp_fields() {

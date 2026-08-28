@@ -13,6 +13,7 @@ pub mod finalize;
 pub mod helpers;
 pub mod prepare;
 pub mod start;
+pub mod state;
 pub mod stop;
 pub mod wait;
 
