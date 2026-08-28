@@ -6,7 +6,7 @@
 use crate::comp::CompGlobals;
 use crate::env::{delta, dump, files};
 use crate::error::{Error, Result};
-use crate::session::{helpers, runtime_path};
+use crate::session::{helpers, runtime_path, state};
 use crate::sysd::dbus::{SessionBus, SystemBus};
 use crate::varnames;
 use std::collections::BTreeMap;
@@ -26,9 +26,11 @@ pub fn prepare_env(comp: &CompGlobals) -> Result<()> {
     deduce_session(&mut env_login)?;
     ensure_bindpid(&bus, &env_login);
 
-    // current systemd activation env — saved for restore on cleanup
+    // current systemd activation env, snapshotted for restore on cleanup.
+    // Establishes a fresh session generation (resolving any state an
+    // abandoned prior session left behind first) — see `session::state`.
     let env_pre = bus.systemd_vars()?;
-    files::save_env(&runtime_path("env_pre")?, &env_pre, files::Sep::Nul)?;
+    state::begin_generation(&bus, &env_pre)?;
 
     // env handed to the shell loader: systemd env overridden by login env
     let mut env_merged = env_pre.clone();
@@ -39,10 +41,7 @@ pub fn prepare_env(comp: &CompGlobals) -> Result<()> {
 
     // delta + apply
     let changes = delta::compute_changes(&env_pre, &env_post);
-    files::append_cleanup(
-        &runtime_path("env_cleanup.list")?,
-        changes.cleanup.iter().cloned(),
-    )?;
+    state::append_cleanup(changes.cleanup.iter().cloned())?;
     if !changes.set.is_empty() {
         bus.set_systemd_vars(&changes.set)?;
     }
@@ -162,6 +161,8 @@ fn run_loader(
         .envs(env_merged)
         .output()
         .map_err(|e| Error::io("/bin/sh", e))?;
+
+    let _ = std::fs::remove_file(&aux_path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed = dump::parse_shell_dump(&stdout, mark)?;

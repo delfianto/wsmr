@@ -50,12 +50,10 @@ pub fn serialize_env(env: &BTreeMap<String, String>, sep: Sep) -> String {
     out
 }
 
-/// Write `env` to `path`, creating parent directories.
+/// Write `env` to `path` atomically (temp file + rename), creating parent
+/// directories as needed, so a reader never observes a truncated file.
 pub fn save_env(path: &Path, env: &BTreeMap<String, String>, sep: Sep) -> Result<()> {
-    if let Some(p) = path.parent() {
-        std::fs::create_dir_all(p).map_err(|e| Error::io(p, e))?;
-    }
-    std::fs::write(path, serialize_env(env, sep)).map_err(|e| Error::io(path, e))
+    crate::util::fsutil::atomic_write_path(path, &serialize_env(env, sep))
 }
 
 /// Parse NUL-separated `KEY=VALUE` data, dropping invalid names. Each chunk is
@@ -84,38 +82,48 @@ pub fn load_env(path: &Path) -> Result<BTreeMap<String, String>> {
     }
 }
 
-/// Read the cleanup-list file into a set. Missing file → empty set.
-pub fn read_cleanup(path: &Path) -> Result<BTreeSet<String>> {
+/// One cleanup-list entry: a variable name tagged with the session
+/// generation that requested its cleanup, so a reader can tell entries left
+/// over by a different (older) session apart from its own. See
+/// `crate::session::state`, which owns locking and generation IDs — this
+/// module only (de)serializes the file.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CleanupEntry {
+    /// Generation id that recorded this entry.
+    pub generation: String,
+    /// Variable name to consider for cleanup.
+    pub name: String,
+}
+
+/// Read every entry in the cleanup-list file, of any generation. Missing
+/// file → empty set. Malformed lines are ignored, not trusted.
+pub fn read_cleanup_entries(path: &Path) -> Result<BTreeSet<CleanupEntry>> {
     match std::fs::read_to_string(path) {
         Ok(s) => Ok(s
             .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(String::from)
+            .filter_map(|l| {
+                let (generation, name) = l.split_once(' ')?;
+                (!generation.is_empty() && filter::keep_name(name)).then(|| CleanupEntry {
+                    generation: generation.to_string(),
+                    name: name.to_string(),
+                })
+            })
             .collect()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
         Err(e) => Err(Error::io(path, e)),
     }
 }
 
-/// Merge `names` into the cleanup-list file (deduped, name-filtered, sorted).
-/// No-op write when nothing new is added.
-pub fn append_cleanup(path: &Path, names: impl IntoIterator<Item = String>) -> Result<()> {
-    let mut existing = read_cleanup(path)?;
-    let mut added = false;
-    for n in names {
-        if filter::keep_name(&n) && existing.insert(n) {
-            added = true;
-        }
+/// Atomically replace the cleanup-list file with exactly `entries`.
+pub fn write_cleanup_entries(path: &Path, entries: &BTreeSet<CleanupEntry>) -> Result<()> {
+    let mut body = String::new();
+    for e in entries {
+        body.push_str(&e.generation);
+        body.push(' ');
+        body.push_str(&e.name);
+        body.push('\n');
     }
-    if !added {
-        return Ok(());
-    }
-    if let Some(p) = path.parent() {
-        std::fs::create_dir_all(p).map_err(|e| Error::io(p, e))?;
-    }
-    let body = existing.into_iter().collect::<Vec<_>>().join("\n");
-    std::fs::write(path, format!("{body}\n")).map_err(|e| Error::io(path, e))
+    crate::util::fsutil::atomic_write_path(path, &body)
 }
 
 #[cfg(test)]
@@ -171,20 +179,47 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_append_dedups_and_filters() {
+    fn cleanup_entries_round_trip_and_stay_generation_tagged() {
         let dir = tmp();
         let path = dir.join("env_cleanup.list");
-        append_cleanup(&path, ["FOO".into(), "BAR".into(), "1BAD".into()]).unwrap();
-        // adding an existing one + a new one
-        append_cleanup(&path, ["FOO".into(), "BAZ".into()]).unwrap();
-        let got = read_cleanup(&path).unwrap();
-        assert_eq!(
-            got,
-            ["FOO", "BAR", "BAZ"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
+        let entries: BTreeSet<CleanupEntry> = [
+            ("gen1", "FOO"),
+            ("gen1", "BAR"),
+            ("gen2", "FOO"), // same name, different generation — kept distinct
+        ]
+        .into_iter()
+        .map(|(g, n)| CleanupEntry {
+            generation: g.to_string(),
+            name: n.to_string(),
+        })
+        .collect();
+        write_cleanup_entries(&path, &entries).unwrap();
+        let back = read_cleanup_entries(&path).unwrap();
+        assert_eq!(back, entries);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cleanup_entries_missing_file_is_empty() {
+        assert!(
+            read_cleanup_entries(&tmp().join("nope"))
+                .unwrap()
+                .is_empty()
         );
+    }
+
+    #[test]
+    fn cleanup_entries_ignore_malformed_lines() {
+        let dir = tmp();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("env_cleanup.list");
+        std::fs::write(&path, "no-space-here\ngen1 OK\ngen2 1BAD\n").unwrap();
+        let got = read_cleanup_entries(&path).unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(got.contains(&CleanupEntry {
+            generation: "gen1".into(),
+            name: "OK".into(),
+        }));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

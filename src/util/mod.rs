@@ -1,5 +1,6 @@
 //! Small cross-cutting utilities.
 
+pub mod fsutil;
 pub mod xdg;
 
 use crate::error::{Error, Result};

@@ -1,11 +1,14 @@
-//! On-disk unit generation: diff-on-write, rung resolution, and writing the
-//! graph + drop-ins. Ports `update_unit`/`remove_unit`/`get_unit_path`
-//! (`main.py:1275`/`:1340`/`:1117`). `reload` lives in [`crate::sysd`] (M1+).
+//! On-disk unit generation: rung resolution and applying a validated
+//! [`GenerationPlan`]/[`RemovalPlan`] (see [`super::plan`]) to disk.
+//! Ports `update_unit`/`remove_unit`/`get_unit_path`
+//! (`main.py:1275`/`:1340`/`:1117`), extended with ownership tracking so
+//! generation and cleanup can never mutate a file wsmr doesn't verifiably
+//! own (see `docs/coexistence.md`). `reload` lives in [`crate::sysd`] (M1+).
 //! See `REFERENCE.md` §8.2.
 
+use super::plan::{Conflict, GenerationPlan, RemovalPlan};
 use crate::error::{Error, Result};
-use crate::units::templates::{self, DropinInput, RenderCtx};
-use crate::util::xdg;
+use crate::util::{fsutil, xdg};
 use std::path::{Path, PathBuf};
 
 /// Where unit files are written.
@@ -17,7 +20,7 @@ pub enum Rung {
     Home,
 }
 
-/// Outcome of a generation run.
+/// Outcome of applying a plan.
 #[derive(Debug, Default)]
 pub struct GenOutcome {
     /// Whether any file was created, updated, or removed.
@@ -26,14 +29,6 @@ pub struct GenOutcome {
     pub written: Vec<String>,
     /// Relative names removed.
     pub removed: Vec<String>,
-}
-
-impl GenOutcome {
-    fn merge(&mut self, other: GenOutcome) {
-        self.changed |= other.changed;
-        self.written.extend(other.written);
-        self.removed.extend(other.removed);
-    }
 }
 
 /// Resolve the systemd user-unit directory for a rung.
@@ -45,118 +40,151 @@ pub fn rung_dir(rung: Rung) -> Result<PathBuf> {
     Ok(base.join("systemd").join("user"))
 }
 
-/// Write `content` to `dir/relname` (creating parent dirs), only if it differs
-/// from what's already there. Returns true if created or updated.
-pub fn update_unit(dir: &Path, relname: &str, content: &str) -> Result<bool> {
-    let path = dir.join(relname);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+/// Build the refusal error for a plan carrying conflicts. Never call this
+/// with an empty conflict list.
+pub fn conflict_error(dir: &Path, conflicts: &[Conflict]) -> Error {
+    let mut msg = format!(
+        "refusing to touch {} path(s) in {} that are not verifiably owned by wsmr:\n",
+        conflicts.len(),
+        dir.display()
+    );
+    for c in conflicts {
+        msg.push_str(&format!("  {} \u{2014} {}\n", c.relname, c.reason));
     }
-    if let Ok(old) = std::fs::read_to_string(&path)
-        && old == content
+    msg.push_str(
+        "Nothing was written. If this belongs to another session manager (e.g. uwsm), \
+         leave it running; otherwise inspect and remove it manually before retrying.",
+    );
+    Error::GenerationConflict(msg)
+}
+
+/// One already-applied step, kept so a later failure in the same batch can
+/// be rolled back by restoring what was there before.
+struct Applied {
+    relname: String,
+    previous: Option<String>,
+}
+
+fn rollback(dir: &Path, applied: &[Applied]) {
+    for a in applied.iter().rev() {
+        match &a.previous {
+            Some(content) => {
+                let _ = fsutil::atomic_write(dir, &a.relname, content);
+            }
+            None => {
+                let _ = std::fs::remove_file(dir.join(&a.relname));
+            }
+        }
+    }
+}
+
+/// Remove `parent` if it's an empty subdirectory of `dir` (never `dir`
+/// itself, and never recursively — only a directory that is already empty).
+fn remove_empty_parent(dir: &Path, removed_path: &Path) {
+    if let Some(parent) = removed_path.parent()
+        && parent != dir
     {
-        return Ok(false);
-    }
-    std::fs::write(&path, content).map_err(|e| Error::io(&path, e))?;
-    Ok(true)
-}
-
-/// Remove `dir/relname` if present. Returns true if a file was removed.
-pub fn remove_unit(dir: &Path, relname: &str) -> Result<bool> {
-    let path = dir.join(relname);
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(Error::io(&path, e)),
+        let _ = std::fs::remove_dir(parent);
     }
 }
 
-/// Write the full static unit graph (rendered) into `dir`.
-pub fn write_graph(dir: &Path, ctx: &RenderCtx) -> Result<GenOutcome> {
+/// Apply a [`GenerationPlan`] previously built by [`super::plan::plan_generate`].
+///
+/// Refuses outright (writing nothing) if the plan still carries conflicts —
+/// callers should normally have already checked and reported those, but this
+/// is the last line of defense. On a mid-batch write failure, already-applied
+/// steps in this call are rolled back to their prior content before the error
+/// is returned, so a partial failure never leaves a mixed old/new graph.
+pub fn apply_generate(dir: &Path, plan: GenerationPlan) -> Result<GenOutcome> {
+    if !plan.conflicts.is_empty() {
+        return Err(conflict_error(dir, &plan.conflicts));
+    }
+
+    let mut manifest = plan.manifest;
+    let mut applied: Vec<Applied> = Vec::new();
     let mut out = GenOutcome::default();
-    for unit in templates::GRAPH {
-        let body = templates::render(unit.body, ctx);
-        if update_unit(dir, unit.name, &body)? {
-            out.changed = true;
-            out.written.push(unit.name.to_string());
+
+    for w in &plan.writes {
+        let previous = std::fs::read_to_string(dir.join(&w.relname)).ok();
+        if let Err(e) = fsutil::atomic_write(dir, &w.relname, &w.content) {
+            rollback(dir, &applied);
+            return Err(e);
         }
+        applied.push(Applied {
+            relname: w.relname.clone(),
+            previous,
+        });
+        manifest.record(&w.relname, &w.content);
+        out.changed = true;
+        out.written.push(w.relname.clone());
+    }
+
+    for r in &plan.removes {
+        let path = dir.join(&r.relname);
+        let previous = std::fs::read_to_string(&path).ok();
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                rollback(dir, &applied);
+                return Err(Error::io(&path, e));
+            }
+        }
+        applied.push(Applied {
+            relname: r.relname.clone(),
+            previous,
+        });
+        manifest.forget(&r.relname);
+        remove_empty_parent(dir, &path);
+        out.changed = true;
+        out.removed.push(r.relname.clone());
+    }
+
+    if out.changed {
+        manifest.save(dir)?;
     }
     Ok(out)
 }
 
-/// Write (or remove) the per-compositor `50_custom.conf` drop-ins in `dir`.
-pub fn write_dropins(dir: &Path, input: &DropinInput) -> Result<GenOutcome> {
+/// Apply a [`RemovalPlan`] previously built by [`super::plan::plan_remove_all`].
+///
+/// Only ever removes manifest-owned, content-verified per-compositor
+/// drop-ins (see [`super::plan::plan_remove_all`] docs on why the static
+/// graph is excluded). Entries the plan marked as skipped are left on disk
+/// and dropped from the manifest so a stale/drifted entry can't keep coming
+/// back as a false conflict.
+pub fn apply_removal(dir: &Path, plan: RemovalPlan) -> Result<GenOutcome> {
+    let mut manifest = plan.manifest;
+    let mut applied: Vec<Applied> = Vec::new();
     let mut out = GenOutcome::default();
-    let preloader = format!(
-        "wayland-wm-env@{}.service.d/50_custom.conf",
-        input.id_unit_string
-    );
-    let service = format!(
-        "wayland-wm@{}.service.d/50_custom.conf",
-        input.id_unit_string
-    );
 
-    apply(
-        dir,
-        &preloader,
-        templates::preloader_dropin(input),
-        &mut out,
-    )?;
-    apply(dir, &service, templates::service_dropin(input), &mut out)?;
-    Ok(out)
-}
-
-fn apply(dir: &Path, relname: &str, text: Option<String>, out: &mut GenOutcome) -> Result<()> {
-    match text {
-        Some(body) => {
-            if update_unit(dir, relname, &body)? {
-                out.changed = true;
-                out.written.push(relname.to_string());
+    for r in &plan.removes {
+        let path = dir.join(&r.relname);
+        let previous = std::fs::read_to_string(&path).ok();
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                rollback(dir, &applied);
+                return Err(Error::io(&path, e));
             }
         }
-        None => {
-            if remove_unit(dir, relname)? {
-                out.changed = true;
-                out.removed.push(relname.to_string());
-            }
-        }
+        applied.push(Applied {
+            relname: r.relname.clone(),
+            previous,
+        });
+        manifest.forget(&r.relname);
+        remove_empty_parent(dir, &path);
+        out.changed = true;
+        out.removed.push(r.relname.clone());
     }
-    Ok(())
-}
 
-/// Generate the graph + drop-ins for a compositor into `dir`.
-pub fn generate(dir: &Path, ctx: &RenderCtx, dropins: &DropinInput) -> Result<GenOutcome> {
-    let mut out = write_graph(dir, ctx)?;
-    out.merge(write_dropins(dir, dropins)?);
-    Ok(out)
-}
+    for skipped in &plan.skipped {
+        manifest.forget(&skipped.relname);
+    }
 
-/// Remove all wsmr-generated units from `dir`: the static graph files and any
-/// per-compositor `wayland-wm{,-env}@*.service.d` drop-in directories.
-pub fn remove_all(dir: &Path) -> Result<GenOutcome> {
-    let mut out = GenOutcome::default();
-    if !dir.exists() {
-        return Ok(out);
-    }
-    for unit in templates::GRAPH {
-        if remove_unit(dir, unit.name)? {
-            out.changed = true;
-            out.removed.push(unit.name.to_string());
-        }
-    }
-    for entry in std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))? {
-        let entry = entry.map_err(|e| Error::io(dir, e))?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.ends_with(".service.d")
-            && (name.starts_with("wayland-wm@") || name.starts_with("wayland-wm-env@"))
-        {
-            let path = entry.path();
-            if path.is_dir() {
-                std::fs::remove_dir_all(&path).map_err(|e| Error::io(&path, e))?;
-                out.changed = true;
-                out.removed.push(name);
-            }
-        }
+    if out.changed || !plan.skipped.is_empty() {
+        manifest.save(dir)?;
     }
     Ok(out)
 }
@@ -164,8 +192,9 @@ pub fn remove_all(dir: &Path) -> Result<GenOutcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::units::templates::RenderCtx;
-    use std::path::PathBuf;
+    use crate::units::manifest::Manifest;
+    use crate::units::plan::{plan_generate, plan_remove_all};
+    use crate::units::templates::{self, DropinInput, RenderCtx};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempDir(PathBuf);
@@ -175,8 +204,11 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let p =
-                std::env::temp_dir().join(format!("wsmr-test-{}-{}", std::process::id(), nanos));
+            let p = std::env::temp_dir().join(format!(
+                "wsmr-generate-{}-{}",
+                std::process::id(),
+                nanos
+            ));
             std::fs::create_dir_all(&p).unwrap();
             TempDir(p)
         }
@@ -196,67 +228,6 @@ mod tests {
             bin_path: "/usr/bin/wsmr".into(),
             waitpid_bin: "waitpid".into(),
         }
-    }
-
-    #[test]
-    fn graph_writes_then_idempotent() {
-        let td = TempDir::new();
-        let first = write_graph(td.path(), &ctx()).unwrap();
-        assert!(first.changed);
-        assert_eq!(first.written.len(), templates::GRAPH.len());
-        // file actually present and rendered
-        let wm = std::fs::read_to_string(td.path().join("wayland-wm@.service")).unwrap();
-        assert!(wm.contains("ExecStart=/usr/bin/wsmr aux exec -- %I"));
-        // second run: no change
-        let second = write_graph(td.path(), &ctx()).unwrap();
-        assert!(!second.changed);
-        assert!(second.written.is_empty());
-    }
-
-    #[test]
-    fn update_unit_detects_change() {
-        let td = TempDir::new();
-        assert!(update_unit(td.path(), "a.service", "x\n").unwrap());
-        assert!(!update_unit(td.path(), "a.service", "x\n").unwrap());
-        assert!(update_unit(td.path(), "a.service", "y\n").unwrap());
-    }
-
-    #[test]
-    fn dropins_written_in_subdir_and_removable() {
-        let td = TempDir::new();
-        let input = DropinInput {
-            id: "sway".into(),
-            id_unit_string: "sway".into(),
-            bin_path: "/usr/bin/wsmr".into(),
-            bin_name: "sway".into(),
-            desktop_names: vec!["sway".into()],
-            cmdline: vec!["/usr/bin/sway".into()],
-            ..Default::default()
-        };
-        let out = write_dropins(td.path(), &input).unwrap();
-        assert!(out.changed);
-        let svc = td.path().join("wayland-wm@sway.service.d/50_custom.conf");
-        assert!(svc.exists());
-
-        // a minimal (no-customization) input removes the drop-ins again
-        let minimal = DropinInput {
-            id: "sway".into(),
-            id_unit_string: "sway".into(),
-            bin_path: "/usr/bin/wsmr".into(),
-            bin_name: "sway".into(),
-            desktop_names: vec!["sway".into()],
-            cmdline: vec!["sway".into()],
-            ..Default::default()
-        };
-        let out2 = write_dropins(td.path(), &minimal).unwrap();
-        assert!(out2.changed);
-        assert!(!svc.exists());
-    }
-
-    #[test]
-    fn remove_missing_is_noop() {
-        let td = TempDir::new();
-        assert!(!remove_unit(td.path(), "nope.service").unwrap());
     }
 
     fn dropin_input() -> DropinInput {
@@ -289,11 +260,11 @@ mod tests {
     }
 
     #[test]
-    fn generate_then_remove_all() {
+    fn generate_then_regenerate_is_idempotent() {
         let td = TempDir::new();
-        let out = generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        let out = apply_generate(td.path(), plan).unwrap();
         assert!(out.changed);
-        // graph + the per-compositor drop-in dir both exist
         assert!(td.path().join("wayland-wm@.service").exists());
         assert!(
             td.path()
@@ -301,18 +272,130 @@ mod tests {
                 .exists()
         );
 
-        let rm = remove_all(td.path()).unwrap();
-        assert!(rm.changed);
-        assert!(!td.path().join("wayland-wm@.service").exists());
-        assert!(!td.path().join("wayland-wm@sway.service.d").exists());
-        // removing again is a no-op
-        let rm2 = remove_all(td.path()).unwrap();
-        assert!(!rm2.changed);
+        let plan2 = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        assert!(plan2.is_empty());
+        let out2 = apply_generate(td.path(), plan2).unwrap();
+        assert!(!out2.changed);
     }
 
     #[test]
-    fn remove_all_missing_dir_is_noop() {
+    fn manifest_records_only_what_was_written() {
+        let td = TempDir::new();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        apply_generate(td.path(), plan).unwrap();
+
+        let manifest = Manifest::load(td.path()).unwrap();
+        let wm = std::fs::read_to_string(td.path().join("wayland-wm@.service")).unwrap();
+        assert!(manifest.verify("wayland-wm@.service", &wm));
+    }
+
+    #[test]
+    fn conflicting_plan_is_refused_and_writes_nothing() {
+        let td = TempDir::new();
+        std::fs::write(td.path().join("wayland-wm@.service"), "foreign\n").unwrap();
+
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        assert!(!plan.conflicts.is_empty());
+        let err = apply_generate(td.path(), plan).unwrap_err();
+        assert!(err.to_string().contains("wayland-wm@.service"));
+        // nothing else got written either
+        assert!(!td.path().join("wayland-wm@sway.service.d").exists());
+        assert_eq!(
+            std::fs::read_to_string(td.path().join("wayland-wm@.service")).unwrap(),
+            "foreign\n"
+        );
+    }
+
+    #[test]
+    fn remove_all_leaves_graph_units_and_removes_owned_dropins() {
+        let td = TempDir::new();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        apply_generate(td.path(), plan).unwrap();
+        assert!(td.path().join("wayland-wm@.service").exists());
+
+        let removal = plan_remove_all(td.path()).unwrap();
+        let out = apply_removal(td.path(), removal).unwrap();
+        assert!(out.changed);
+        // static graph survives
+        assert!(td.path().join("wayland-wm@.service").exists());
+        // owned per-compositor drop-in (and its now-empty dir) is gone
+        assert!(!td.path().join("wayland-wm@sway.service.d").exists());
+
+        // idempotent: running it again changes nothing
+        let removal2 = plan_remove_all(td.path()).unwrap();
+        let out2 = apply_removal(td.path(), removal2).unwrap();
+        assert!(!out2.changed);
+    }
+
+    #[test]
+    fn remove_all_never_deletes_a_sibling_foreign_dropin() {
+        let td = TempDir::new();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input()).unwrap();
+        apply_generate(td.path(), plan).unwrap();
+
+        // a foreign sibling drop-in in the same directory
+        let sibling = td.path().join("wayland-wm@sway.service.d/10_foreign.conf");
+        std::fs::write(&sibling, "not ours\n").unwrap();
+
+        let removal = plan_remove_all(td.path()).unwrap();
+        apply_removal(td.path(), removal).unwrap();
+
+        // our file is gone, but the directory survives because the sibling
+        // is still in it, and the sibling itself is untouched
+        assert!(td.path().join("wayland-wm@sway.service.d").exists());
+        assert_eq!(std::fs::read_to_string(&sibling).unwrap(), "not ours\n");
+    }
+
+    #[test]
+    fn remove_missing_dir_is_noop() {
         let missing = std::env::temp_dir().join(format!("wsmr-absent-{}", std::process::id()));
-        assert!(!remove_all(&missing).unwrap().changed);
+        let plan = plan_remove_all(&missing).unwrap();
+        assert!(plan.removes.is_empty());
+        let out = apply_removal(&missing, plan).unwrap();
+        assert!(!out.changed);
+    }
+
+    #[test]
+    fn a_failed_write_rolls_back_earlier_writes_in_the_same_batch() {
+        let td = TempDir::new();
+        // Prime the manifest with an entry for the first graph unit so it's
+        // eligible to be "updated", then make its parent directory replaced
+        // by a file so the *second* planned write fails partway through.
+        // Index 5 is `wayland-wm@.service`, which embeds `@BIN_PATH@` (unlike
+        // the static targets at the front of the array), so changing
+        // `bin_path` below actually changes its rendered content.
+        let first = &templates::GRAPH[5];
+        let old = templates::render(first.body, &ctx());
+        std::fs::write(td.path().join(first.name), &old).unwrap();
+        let mut manifest = Manifest::default();
+        manifest.record(first.name, &old);
+        manifest.save(td.path()).unwrap();
+
+        let new_ctx = RenderCtx {
+            bin_name: "wsmr".into(),
+            bin_path: "/usr/local/bin/wsmr".into(),
+            waitpid_bin: "waitpid".into(),
+        };
+        let plan = plan_generate(td.path(), &new_ctx, &dropin_input()).unwrap();
+        assert!(plan.conflicts.is_empty());
+        // sabotage a later planned write so it cannot possibly succeed: its
+        // destination directory is occupied by a plain file.
+        let victim_relname = "wayland-wm-env@.service";
+        assert!(plan.writes.iter().any(|w| w.relname == victim_relname));
+        let victim_path = td.path().join(victim_relname);
+        std::fs::create_dir_all(victim_path.parent().unwrap()).unwrap();
+        // occupy the destination path itself with a directory, so writing a
+        // *file* there fails.
+        std::fs::create_dir_all(&victim_path).unwrap();
+
+        let err = apply_generate(td.path(), plan).unwrap_err();
+        let _ = err;
+
+        // the first unit's content must have been rolled back to `old`,
+        // proving the earlier successful write was undone.
+        assert_eq!(
+            std::fs::read_to_string(td.path().join(first.name)).unwrap(),
+            old
+        );
     }
 }

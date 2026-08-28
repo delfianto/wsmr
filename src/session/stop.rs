@@ -4,6 +4,8 @@
 use crate::error::Result;
 use crate::sysd::dbus::SessionBus;
 use crate::units::generate::{self, Rung};
+use crate::units::plan::{RemovalPlan, plan_remove_all};
+use std::path::Path;
 
 /// Whether a compositor or graphical session is active/activating.
 pub fn is_active(bus: &SessionBus) -> Result<bool> {
@@ -46,6 +48,9 @@ pub struct StopOpts {
 }
 
 /// Run the `stop` command.
+///
+/// `--dry-run --remove` is strictly read-only (P0-02): the removal plan is
+/// computed and reported without deleting anything or reloading the manager.
 pub fn run_stop(opts: &StopOpts) -> Result<()> {
     let bus = SessionBus::connect()?;
     if !stop_wm(&bus, opts.dry_run)? {
@@ -54,13 +59,43 @@ pub fn run_stop(opts: &StopOpts) -> Result<()> {
 
     if opts.remove.is_some() {
         let dir = generate::rung_dir(opts.rung)?;
-        let outcome = generate::remove_all(&dir)?;
+        let plan = plan_remove_all(&dir)?;
+
+        if opts.dry_run {
+            report_removal_plan(&dir, &plan);
+            return Ok(());
+        }
+
+        for skipped in &plan.skipped {
+            eprintln!(
+                "warning: leaving {} untouched \u{2014} {}",
+                skipped.relname, skipped.reason
+            );
+        }
+        let outcome = generate::apply_removal(&dir, plan)?;
         for r in &outcome.removed {
             println!("  - {r}");
         }
-        if outcome.changed && !opts.dry_run {
+        if outcome.changed {
             bus.reload()?;
         }
     }
     Ok(())
+}
+
+fn report_removal_plan(dir: &Path, plan: &RemovalPlan) {
+    println!("Dry run: removal in {}", dir.display());
+    if plan.removes.is_empty() && plan.skipped.is_empty() {
+        println!("  (nothing to remove)");
+        return;
+    }
+    for r in &plan.removes {
+        println!("  - {}", r.relname);
+    }
+    for s in &plan.skipped {
+        println!("  ! {} (left in place \u{2014} {})", s.relname, s.reason);
+    }
+    if !plan.removes.is_empty() {
+        println!("  (would reload the systemd user manager)");
+    }
 }

@@ -11,9 +11,8 @@
 //! is accepted under `NotifyAccess=all`.
 
 use crate::comp::CompGlobals;
-use crate::env::files;
 use crate::error::{Error, Result};
-use crate::session::{runtime_path, wait};
+use crate::session::{state, wait};
 use crate::sysd::dbus::SessionBus;
 use std::collections::BTreeMap;
 use std::os::unix::process::CommandExt;
@@ -65,8 +64,14 @@ pub fn readiness_watch(comp: &CompGlobals) -> Result<()> {
         }
     }
     if !delta.is_empty() {
+        // Record the cleanup obligation *before* exporting: if recording
+        // failed after the export instead, the variable would be live with
+        // no cleanup entry pointing at it — a real leak. Recording first and
+        // then failing to export just leaves a harmless entry for a variable
+        // that was never actually set (cleanup-env only unsets names it also
+        // finds in the current activation environment).
+        state::append_cleanup(delta.keys().cloned())?;
         bus.set_systemd_vars(&delta)?;
-        files::append_cleanup(&runtime_path("env_cleanup.list")?, delta.keys().cloned())?;
     }
 
     // declare readiness if still activating; else narrow access if wide open

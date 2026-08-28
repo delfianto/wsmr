@@ -45,6 +45,31 @@ pub enum Error {
         /// Human description of the missing feature.
         what: &'static str,
     },
+
+    /// Unit generation or removal was refused because one or more
+    /// destinations are not verifiably owned by wsmr (a foreign or
+    /// hand-edited file already occupies the path). See
+    /// [`crate::units::generate::conflict_error`].
+    #[error("{0}")]
+    GenerationConflict(String),
+
+    /// A `set`/`unset` activation-environment update touches both systemd
+    /// and (for classic dbus-daemon only) D-Bus; this fires when one side
+    /// succeeded and the other then failed, so the two are now inconsistent
+    /// until the caller retries. See
+    /// [`crate::sysd::dbus::SessionBus::set_systemd_vars`].
+    #[error("{operation} succeeded on {applied}, but failed on {failed}: {source}")]
+    PartialEnvUpdate {
+        /// `"set"` or `"unset"`.
+        operation: &'static str,
+        /// Which side already has the change applied.
+        applied: &'static str,
+        /// Which side the failure left behind.
+        failed: &'static str,
+        /// The underlying D-Bus failure.
+        #[source]
+        source: Box<zbus::Error>,
+    },
 }
 
 impl Error {
@@ -86,5 +111,20 @@ mod tests {
             Error::todo("M9", "warp drive").to_string(),
             "warp drive is not implemented yet (M9)"
         );
+    }
+
+    #[test]
+    fn partial_env_update_names_both_sides() {
+        let e = Error::PartialEnvUpdate {
+            operation: "set",
+            applied: "systemd",
+            failed: "the D-Bus daemon",
+            source: Box::new(zbus::Error::Failure("nope".into())),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("set"));
+        assert!(msg.contains("systemd"));
+        assert!(msg.contains("the D-Bus daemon"));
+        assert!(msg.contains("nope"));
     }
 }
