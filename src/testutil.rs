@@ -2,6 +2,21 @@
 
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
+/// A guaranteed-nonexistent path, for pointing `XDG_DATA_DIRS`/
+/// `XDG_CONFIG_DIRS` away from the host's real system directories in tests
+/// that need a fully isolated desktop-entry/config hierarchy.
+///
+/// **Not** an empty string: `crate::util::xdg::data_dirs`/`config_dirs`
+/// treat `""` as *unset* (by design — see `util::xdg`'s own tests) and fall
+/// back to `/usr/share`+co, so a test that sets these to `""` silently pulls
+/// in the host's real desktop entries instead of excluding them (this is
+/// exactly what made `app::terminal`'s tests host-dependent — see
+/// `fix-plan.md` P3-01). A nonexistent absolute path is a real, non-empty
+/// value, so it's honored as "search here" — and every reader in this crate
+/// already treats a missing directory as simply empty, so nothing needs to
+/// exist on disk at this path.
+pub const NO_XDG_DIRS: &str = "/nonexistent-wsmr-test-xdg-dirs";
+
 /// Process-wide lock serializing tests that mutate `std::env`. `set_var` /
 /// `remove_var` are process-global (and `unsafe` in edition 2024), so env-driven
 /// tests must not run concurrently with each other.
