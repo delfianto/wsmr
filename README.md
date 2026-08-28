@@ -17,8 +17,11 @@ minimal display manager and you understand *why* you'd want systemd to own the
 session graph. There is no hand-holding here and no "paste these dotfiles" path.
 
 > **Status: experiment.** The full lifecycle is verified end-to-end against a
-> *stub* compositor on real systemd (containerized, and in CI), but it has not
-> babysat a daily-driver desktop for months. See [Status & disclaimer](#status--disclaimer).
+> *stub* compositor on real systemd, in a container (`just integration`,
+> **not yet run in CI** — see [Development & testing](#development--testing)) —
+> it has not babysat a daily-driver desktop for months. See
+> [Status & disclaimer](#status--disclaimer) and
+> [`fix-plan.md`](fix-plan.md) for exactly what has and hasn't been verified.
 
 ## Why this exists
 
@@ -41,8 +44,8 @@ Out (by design):
 
 - **Compositor selection.** Your display manager (SDDM here) picks the session;
   wsmr just does the systemd plumbing for the command it's handed.
-- Shell plugins/quirks, tweak drop-ins, `fumon`, `ttyautolock`, and the rest of
-  uwsm's surface. Not ported.
+- Shell plugins/quirks, `fumon`, `ttyautolock`, and the rest of uwsm's surface.
+  Not ported. (Tweak drop-ins *are* ported — `start -t`/`-T`.)
 
 ## How it works (the part you actually care about)
 
@@ -78,8 +81,8 @@ stop as a unit when the compositor exits.
 
 ```
 wsmr start <wm>
+  ├─ refuse if a compositor is already active (checked before touching anything)
   ├─ generate units + per-compositor 50_custom.conf drop-ins, daemon-reload
-  ├─ refuse if a compositor is already active
   ├─ start wayland-session-bindpid@<pid>  (session lifetime ↔ this process)
   ├─ snapshot the login environment to $XDG_RUNTIME_DIR/wsmr/
   └─ exec → systemd-cat → signal-handler.sh → the envelope target   (process is replaced)
@@ -148,7 +151,8 @@ apps without paying Rust startup per call.
   **D-Bus** — i.e. a normal modern desktop Linux. wsmr orchestrates these; it does
   not replace them.
 - A Wayland compositor you invoke by command.
-- To build: a Rust toolchain, **edition 2024** (rustc ≥ 1.85; developed on 1.95).
+- To build: a Rust toolchain, **edition 2024**, rustc ≥ **1.98.0** (the pinned
+  `rust-version` in `Cargo.toml`; enforced by CI's dedicated MSRV job).
   No system libraries — it's pure Rust.
 
 ## Build
@@ -157,8 +161,10 @@ apps without paying Rust startup per call.
 cargo build --release        # or: just build-release
 ```
 
-The release profile is tuned for execution speed and stripped (fat LTO, one
-codegen unit, `panic = "abort"`). For a CPU-tuned, non-portable build:
+The release profile is tuned for execution speed and stripped (thin LTO, one
+codegen unit, `panic = "abort"`; thin rather than fat — fat LTO's build-time
+and `target/` size cost wasn't worth it for a crate this size). For a
+CPU-tuned, non-portable build:
 
 ```sh
 just build-native            # adds -C target-cpu=native
@@ -202,29 +208,48 @@ systemd/D-Bus/Wayland on Darwin). Because it's pure Rust, it builds and
 unit-tests on either; the macOS run just skips the Linux-only paths.
 
 ```sh
-just lint            # fmt + clippy -D warnings + cargo test (the CI gate)
+just lint            # clippy -D warnings only
 just test            # unit/doc tests (on Linux this also runs the cfg(linux) code)
+just full-gate       # format --check-only + lint + test — mirrors what CI actually runs
 ```
 
+**What CI (`ci.yml`) actually runs, per push/PR:** `just format --check-only`,
+`just lint`, `cargo build --all-targets --verbose`, `just test`, plus a
+separate MSRV job that repeats build+test pinned to the exact
+`rust-version` in `Cargo.toml`. That's it — no coverage gate, no Tier B, no
+integration matrix.
+
 Anything touching a live session runs in Podman (works on macOS via a Linux VM,
-natively on Linux):
+natively on Linux) and is **local-only** — none of the following run in CI
+today:
 
 ```sh
 just test-linux      # Tier A: build + unit tests in a Debian container
-just integration     # Tier B: full session bootstrap on systemd-as-PID-1
-just coverage        # merged unit + integration coverage, gated at >= 90% lines
+just integration     # Tier B: full session bootstrap on systemd-as-PID-1 —
+                      # known to ignore some real failures right now (see fix-plan.md
+                      # Phase 4); don't read a green run as full functional coverage yet
+just coverage        # merged unit + integration coverage; >= 90% lines is the
+                      # authoritative *local* gate — not enforced by CI
 ```
 
-See [`CLAUDE.md`](CLAUDE.md) for the container/coverage internals and
+See [`CLAUDE.md`](CLAUDE.md) for the container/coverage internals,
 [`docs/uwsm-core-analysis.md`](docs/uwsm-core-analysis.md) for the porting spec
-(unit graph, env-delta lifecycle, module layout).
+(unit graph, env-delta lifecycle, module layout),
+[`docs/cli-compatibility.md`](docs/cli-compatibility.md) for the exact
+upstream-compatibility target and known CLI divergences,
+[`docs/coexistence.md`](docs/coexistence.md) for how wsmr avoids stepping on
+a coexisting uwsm installation, and [`fix-plan.md`](fix-plan.md) for the live
+tracker of what's verified vs. still open.
 
 ## Status & disclaimer
 
 This is an experiment. It reaches into your login session, your `systemd --user`
 manager, and your D-Bus activation environment *on purpose*. The lifecycle is
-verified against a stub compositor on real systemd (in a container and in CI) —
-it is **not** a hardened, daily-driven session manager yet.
+verified against a stub compositor on real systemd, run locally in a
+container (`just integration`) — **not currently run in CI**, and known to
+ignore some real failures until `fix-plan.md`'s Phase 4 lands. Unit tests
+(`cargo test`) and lint/format *do* run in CI on every push/PR. None of this
+adds up to a hardened, daily-driven session manager yet.
 
 If you run it on your actual machine and your session faceplants, your autostart
 turns to confetti, you get dumped back to a TTY, or your toaster gains sentience

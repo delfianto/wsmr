@@ -5,6 +5,10 @@
 //! Static units are kept byte-identical to upstream so they can be diffed
 //! against the reference. Service units carry `@BIN_PATH@` / `@BIN_NAME@` /
 //! `@WAITPID_BIN@` placeholders substituted by [`render`].
+//!
+//! `tests/uwsm_unit_compat.rs` verifies this byte-identity claim against a
+//! real uwsm 0.26.7 install's actual shipped units (P6-02) — this isn't just
+//! an aspiration in a comment.
 
 /// An installed unit file: its name and (possibly templated) body.
 pub struct UnitTemplate {

@@ -10,12 +10,20 @@ Manager). It sets up the environment and manages standalone Wayland compositor
 sessions, offloading session/XDG-autostart/D-Bus-activation-environment handling
 to **systemd**.
 
-The upstream Python implementation lives in [`uwsm/`](uwsm/) and is the
-**reference to port from** (it has its own `.git`; it is untracked here, kept as
-read-only source material — do not edit it).
+The upstream Python implementation is the **reference to port from**. There is
+no `uwsm/` sibling checkout in this repository — when a real uwsm install is
+available (e.g. `/usr/share/uwsm/modules/uwsm/main.py` on an Arch/CachyOS box
+with the `uwsm` package installed), read its actual source directly rather
+than relying on memory; several real bugs in this port were only found that
+way (see `fix-plan.md` Phases 2 and 5). Otherwise,
+[`docs/uwsm-core-analysis.md`](docs/uwsm-core-analysis.md) is the porting
+reference distilled from that source.
 
-**Status:** scaffolding stage. Root is a freshly `cargo init`'d binary crate
-(`src/main.rs` is still hello-world). No port code written yet.
+**Status:** past scaffolding — a substantial, working, unit-tested port
+(session bootstrap, environment-delta lifecycle, app launching, CLI surface).
+`fix-plan.md` is the live, authoritative tracker of exactly what's verified
+vs. still open; don't infer status from this paragraph, which will drift —
+check that file.
 
 ## ⚠️ Critical constraint: macOS dev host, Linux-only target
 
@@ -29,15 +37,23 @@ Consequences:
 - What macOS **cannot** do is *run* the session logic (no systemd/D-Bus/Wayland).
   `cargo run` / `/run` / `/verify` can't exercise it — don't claim runtime behavior
   was verified unless it ran on Linux.
-- **Linux build/test runs in Podman** (see below). Tier A (build + unit tests on
-  Linux) works today; Tier B (systemd-as-PID-1 integration tests) is next.
+- **Linux build/test runs in Podman** (see below). Tier A (build + unit tests
+  on Linux) and Tier B (systemd-as-PID-1 integration tests) both exist and
+  run; Tier B currently ignores some real failures via `|| true` and can
+  report a false success (`fix-plan.md` Phase 4 — not yet done) — a green
+  Tier B run today is not full functional coverage. Neither tier runs in CI
+  yet; CI (`.github/workflows/ci.yml`) runs format-check, lint, build, and
+  `cargo test` (roughly `just full-gate` plus an explicit build step), plus
+  a separate MSRV job pinned to `Cargo.toml`'s `rust-version`.
 
 ## Commands
 
 Prefer **`just <recipe>`** as the entry point (`justfile`; run `just` for the
 full list — `build`/`build-release`/`run`/`test`/`lint`/`coverage`/`integration`…).
-`build-release` is stripped + heavily optimized (fat LTO, 1 codegen unit,
-panic=abort); `build-native` adds `-C target-cpu=native` (fastest, non-portable).
+`build-release` is stripped + optimized (thin LTO — not fat; fat's build-time
+and `target/` size cost wasn't worth it here, see the "Use thin LTO for
+release builds" commit — 1 codegen unit, panic=abort); `build-native` adds
+`-C target-cpu=native` (fastest, non-portable).
 The raw equivalents:
 
 ```bash
@@ -46,7 +62,7 @@ cargo build          # debug build
 cargo test           # unit/doc tests (platform-neutral logic only on macOS)
 cargo clippy --all-targets --all-features   # lint
 cargo fmt            # format
-cargo run -- <args>  # Linux only once systemd/D-Bus code exists
+cargo run -- <args>  # Linux only — needs a live systemd/D-Bus session to do anything
 ```
 
 ## Linux build/test (Podman)
@@ -100,6 +116,11 @@ scripts/coverage.sh merged   # authoritative >=90% gate (Podman); the real numbe
 
 ## What's being ported (reference map)
 
+Paths below are upstream uwsm's own repo layout (`uwsm/uwsm/main.py` etc.) —
+there is no such tree in *this* repo (see "What this is" above); resolve
+these against a real uwsm checkout, or an installed package's module dir
+(e.g. `/usr/share/uwsm/modules/uwsm/main.py`), when you need to check them.
+
 Upstream Python (`uwsm/uwsm/`): `main.py` (~5.2k lines, the bulk — CLI + session
 logic), `dbus.py` (D-Bus helpers), `misc.py` (utilities), `wrapper.py.in` /
 `params.py.in` (build-time templated entrypoints). Shell helpers live in
@@ -119,23 +140,30 @@ CLI surface to reproduce (from `main.py` argparse):
 
 ## Conventions
 
-- **Edition 2024**, current stable toolchain (≥1.85 required; 1.95 installed).
+- **Edition 2024**, rustc ≥ **1.98.0** (pinned as `rust-version` in
+  `Cargo.toml`, enforced by CI's MSRV job).
 - Library logic should be testable without a live systemd/D-Bus — isolate
   side-effecting calls behind small traits/wrappers so the port's logic can be
   unit-tested on macOS.
 - Error handling: `Result` everywhere; reserve `panic!`/`unwrap`/`expect` for
-  genuine invariants. (`thiserror` for typed library errors, `anyhow` at the
-  binary boundary are the likely choices.)
+  genuine invariants. `thiserror` for the typed library `Error`
+  (`src/error.rs`), `anyhow` at the binary boundary (`main.rs`).
 - Keep `unsafe`/FFI minimal and isolated, each block with a `// SAFETY:` note.
 - Match upstream behavior unless there's a documented reason to diverge; note
   intentional divergences.
 
-## Likely crates (not yet added — decide before adding)
+## Crate choices (decided)
 
-- CLI: `clap` (derive) to mirror the argparse subcommand tree
-- D-Bus: `zbus` (async, pure-Rust) — pairs with `tokio`
-- systemd: `zbus` to talk to systemd's D-Bus API, or `libsystemd`/`sd-notify` FFI
-- desktop entries / XDG: `freedesktop-desktop-entry`, `xdg`
+- CLI: `clap` (derive), mirroring uwsm's argparse subcommand tree —
+  `src/cli.rs`. See `docs/cli-compatibility.md` for exactly how closely.
+- D-Bus/systemd: `zbus`, used in **blocking** mode (`zbus::blocking`), no
+  `tokio` — maps cleanly onto uwsm's synchronous polling. Talks directly to
+  systemd's D-Bus API (`src/sysd/dbus.rs`); no `libsystemd`/`sd-notify` FFI.
+- desktop entries / XDG: **hand-rolled**, not `freedesktop-desktop-entry` or
+  `xdg` (`src/app/entry.rs`, `src/app/field.rs`, `src/util/xdg.rs`) — kept
+  deliberately minimal to the subset wsmr needs, cross-checked against
+  `python-pyxdg`'s real behavior where it matters (locale handling; see
+  `fix-plan.md` Phase 5).
 
 ## Rust skills available (installed globally)
 
