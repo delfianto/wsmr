@@ -174,7 +174,9 @@ mod tests {
         with_env(
             &[
                 ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
-                ("XDG_DATA_DIRS", Some("")), // no system dirs
+                // an empty string is treated as *unset* and falls back to the
+                // host's real /usr/share — see `testutil::NO_XDG_DIRS`.
+                ("XDG_DATA_DIRS", Some(crate::testutil::NO_XDG_DIRS)),
             ],
             f,
         )

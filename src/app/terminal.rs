@@ -413,6 +413,26 @@ mod tests {
         assert!(!excluded.contains("keep.desktop"));
     }
 
+    /// Isolating XDG env for terminal-discovery tests: `DATA_DIRS`/
+    /// `CONFIG_DIRS` point at `testutil::NO_XDG_DIRS`, *not* `""` — an empty
+    /// string is treated as unset and falls back to the host's real
+    /// `/usr/share`, which is exactly what made these tests host-dependent
+    /// (see `fix-plan.md` P3-01: a real terminal on `/usr/share/applications`
+    /// would otherwise be discovered and break the "no terminal" cases).
+    fn isolated_term_env<'a>(
+        root: &'a Path,
+        cfg: &'a Path,
+    ) -> [(&'static str, Option<&'a str>); 6] {
+        [
+            ("XDG_DATA_HOME", root.to_str()),
+            ("XDG_DATA_DIRS", Some(crate::testutil::NO_XDG_DIRS)),
+            ("XDG_CONFIG_HOME", cfg.to_str()),
+            ("XDG_CONFIG_DIRS", Some(crate::testutil::NO_XDG_DIRS)),
+            ("XDG_CACHE_HOME", root.to_str()),
+            ("XDG_CURRENT_DESKTOP", Some("stub")),
+        ]
+    }
+
     #[test]
     fn find_terminal_entry_from_list_and_scan() {
         use crate::testutil::with_env;
@@ -430,49 +450,23 @@ mod tests {
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::write(cfg.join("xdg-terminals.list"), "myterm.desktop\n").unwrap();
 
-        with_env(
-            &[
-                ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
-                ("XDG_DATA_DIRS", Some("")),
-                ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
-                ("XDG_CONFIG_DIRS", Some("")),
-                ("XDG_CACHE_HOME", Some(root.to_str().unwrap())),
-                ("XDG_CURRENT_DESKTOP", Some("stub")),
-            ],
-            || {
-                let (e, action) = find_terminal_entry().unwrap();
-                assert!(is_terminal(&e));
-                assert!(action.is_none());
-            },
-        );
+        with_env(&isolated_term_env(&root, &cfg), || {
+            let (e, action) = find_terminal_entry().unwrap();
+            assert!(is_terminal(&e));
+            assert!(action.is_none());
+        });
 
         // remove the list → falls back to category scan, still finds myterm
         std::fs::remove_file(cfg.join("xdg-terminals.list")).unwrap();
-        with_env(
-            &[
-                ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
-                ("XDG_DATA_DIRS", Some("")),
-                ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
-                ("XDG_CONFIG_DIRS", Some("")),
-                ("XDG_CACHE_HOME", Some(root.to_str().unwrap())),
-                ("XDG_CURRENT_DESKTOP", Some("stub")),
-            ],
-            || assert!(find_terminal_entry().is_ok()),
-        );
+        with_env(&isolated_term_env(&root, &cfg), || {
+            assert!(find_terminal_entry().is_ok())
+        });
 
         // no terminals anywhere → error
         std::fs::remove_file(apps.join("myterm.desktop")).unwrap();
-        with_env(
-            &[
-                ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
-                ("XDG_DATA_DIRS", Some("")),
-                ("XDG_CONFIG_HOME", Some(cfg.to_str().unwrap())),
-                ("XDG_CONFIG_DIRS", Some("")),
-                ("XDG_CACHE_HOME", Some(root.to_str().unwrap())),
-                ("XDG_CURRENT_DESKTOP", Some("stub")),
-            ],
-            || assert!(find_terminal_entry().is_err()),
-        );
+        with_env(&isolated_term_env(&root, &cfg), || {
+            assert!(find_terminal_entry().is_err())
+        });
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -482,14 +476,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("wsmr-negcache-{}", std::process::id()));
         let apps = root.join("applications");
         std::fs::create_dir_all(&apps).unwrap();
-        let env = [
-            ("XDG_DATA_HOME", Some(root.to_str().unwrap())),
-            ("XDG_DATA_DIRS", Some("")),
-            ("XDG_CONFIG_HOME", Some(root.to_str().unwrap())),
-            ("XDG_CONFIG_DIRS", Some("")),
-            ("XDG_CACHE_HOME", Some(root.to_str().unwrap())),
-            ("XDG_CURRENT_DESKTOP", Some("stub")),
-        ];
+        let env = isolated_term_env(&root, &root);
 
         // Phase 1: only a non-terminal present → no terminal found, and the scan
         // records it in the neg-cache (deterministic: nothing to break early on).

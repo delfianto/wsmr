@@ -7,7 +7,7 @@ use crate::comp::CompGlobals;
 use crate::env::{delta, dump, files};
 use crate::error::{Error, Result};
 use crate::session::{helpers, runtime_path, state};
-use crate::sysd::dbus::{SessionBus, SystemBus};
+use crate::sysd::dbus::{SessionBus, SessionLookup, SystemBus};
 use crate::varnames;
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -89,7 +89,8 @@ fn ensure_bindpid(bus: &SessionBus, env: &BTreeMap<String, String>) {
 }
 
 /// Fill `XDG_VTNR`/`XDG_SESSION_ID`/`XDG_SEAT` if missing, via the foreground VT
-/// and logind, and (re)write `env_session.conf`.
+/// and logind, and (re)write `env_session.conf`. Connects to the real system
+/// bus; see [`deduce_session_with`] for the unit-tested branching logic.
 fn deduce_session(env_login: &mut BTreeMap<String, String>) -> Result<()> {
     let nonempty = |m: &BTreeMap<String, String>, k: &str| m.get(k).is_some_and(|v| !v.is_empty());
     if nonempty(env_login, "XDG_SEAT") && nonempty(env_login, "XDG_SESSION_ID") {
@@ -109,7 +110,19 @@ fn deduce_session(env_login: &mut BTreeMap<String, String>) -> Result<()> {
     };
 
     let sysbus = SystemBus::connect()?;
-    let (sid, seat) = sysbus
+    deduce_session_with(env_login, vt, &sysbus)
+}
+
+/// Resolve `(XDG_SESSION_ID, XDG_SEAT)` for `vt` via `lookup` and (re)write
+/// `env_session.conf`. Split out from [`deduce_session`] so this branching
+/// logic — found / absent / a transport failure — is unit-testable against a
+/// fake [`SessionLookup`] instead of the real system bus (P3-02).
+fn deduce_session_with(
+    env_login: &mut BTreeMap<String, String>,
+    vt: u32,
+    lookup: &impl SessionLookup,
+) -> Result<()> {
+    let (sid, seat) = lookup
         .session_by_vt(vt)?
         .ok_or_else(|| Error::Resolve(format!("could not determine login session on VT {vt}")))?;
     env_login.insert("XDG_SESSION_ID".into(), sid);
@@ -277,13 +290,57 @@ mod tests {
         assert!(deduce_session(&mut env).is_ok());
     }
 
+    /// A scriptable [`SessionLookup`] for [`deduce_session_with`] tests —
+    /// see `session::check::Fake` for the same pattern applied more broadly.
+    enum LookupOutcome {
+        Found(&'static str, &'static str),
+        Absent,
+        TransportFailure,
+    }
+
+    struct FakeLookup(LookupOutcome);
+
+    impl SessionLookup for FakeLookup {
+        fn session_by_vt(&self, _vt: u32) -> Result<Option<(String, String)>> {
+            match &self.0 {
+                LookupOutcome::Found(sid, seat) => Ok(Some((sid.to_string(), seat.to_string()))),
+                LookupOutcome::Absent => Ok(None),
+                LookupOutcome::TransportFailure => {
+                    Err(Error::Dbus(zbus::Error::Failure("no system bus".into())))
+                }
+            }
+        }
+    }
+
     #[test]
-    fn deduce_session_needs_logind_when_incomplete() {
-        // VT known but no seat/id → must reach logind; off a real seat/bus this
-        // surfaces an error rather than fabricating a session.
+    fn deduce_session_with_success_fills_seat_and_id() {
+        use crate::testutil::with_env;
+        let rt = std::env::temp_dir().join(format!("wsmr-deduce-ok-{}", std::process::id()));
+        std::fs::create_dir_all(rt.join("wsmr")).unwrap();
+        with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {
+            let mut env = BTreeMap::new();
+            let lookup = FakeLookup(LookupOutcome::Found("3", "seat0"));
+            deduce_session_with(&mut env, 1, &lookup).unwrap();
+            assert_eq!(env.get("XDG_SESSION_ID"), Some(&"3".to_string()));
+            assert_eq!(env.get("XDG_SEAT"), Some(&"seat0".to_string()));
+        });
+        let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    #[test]
+    fn deduce_session_with_absent_session_is_a_resolve_error() {
         let mut env = BTreeMap::new();
-        env.insert("XDG_VTNR".into(), "1".into());
-        assert!(deduce_session(&mut env).is_err());
+        let lookup = FakeLookup(LookupOutcome::Absent);
+        let err = deduce_session_with(&mut env, 1, &lookup).unwrap_err();
+        assert!(err.to_string().contains("VT 1"));
+    }
+
+    #[test]
+    fn deduce_session_with_transport_failure_propagates() {
+        let mut env = BTreeMap::new();
+        let lookup = FakeLookup(LookupOutcome::TransportFailure);
+        let err = deduce_session_with(&mut env, 1, &lookup).unwrap_err();
+        assert!(matches!(err, Error::Dbus(_)));
     }
 
     #[test]

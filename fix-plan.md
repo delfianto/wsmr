@@ -25,12 +25,16 @@ verification command or evidence in the phase's evidence section.
 - [~] **G0 — Safe generation:** Phase 0 is complete before running wsmr against
   the active user's systemd user manager. File-level ownership/atomicity work
   is done and unit-tested; live-bus behavioral verification is still open
-  (see Phase 0 evidence).
+  (see Phase 0 evidence). **Not closed by Phase 3**: Phase 3's `SessionLookup`
+  seam (P3-02) only covers the *system* bus's VT→session lookup; `SessionBus`
+  (the *session* bus wrapper `is_active`/`reload`/etc. use) still has no
+  injectable seam, so this remains open pending either that broader mocking
+  effort (not currently scheduled in any phase) or a live/Tier-B run.
 - [~] **G1 — Safe state handling:** Phases 0 and 1 are complete before a real
   Hyprland login is attempted. Locking/atomicity/generation-scoping is done
   and unit-tested (including a genuine concurrent-OS-thread test); the same
-  live-bus verification gap as G0 applies to the bus-dependent paths
-  (`begin_generation`/`end_generation`) — see Phase 1 evidence.
+  `SessionBus`-mocking gap as G0 applies to `begin_generation`/
+  `end_generation` — see Phase 1 evidence and the G0 note above.
 - [ ] **G2 — Credible Tier B:** Phase 4 passes without ignored functional
   failures before claiming session bootstrap is integration-tested.
 - [ ] **G3 — Real machine:** Phase 7 passes under a disposable CachyOS user
@@ -41,9 +45,11 @@ verification command or evidence in the phase's evidence section.
 - Host: CachyOS, Wayland, Hyprland 0.56.2, systemd 261, dbus-broker.
 - The active desktop is managed by uwsm 0.26.7, not wsmr.
 - Formatting, clippy, and build checks pass.
-- Unit tests currently report 196 passing and 3 host-dependent failures (was
-  166/3 before Phase 0/1; Phase 0 added 21 tests, Phase 1 added another 9; the
-  3 failures are pre-existing and unrelated — see Phase 3).
+- Unit tests currently report **201 passing, 0 failing** — the 3 previously
+  pre-existing host-dependent failures were root-caused and fixed in Phase 3
+  (an XDG-dirs test-isolation bug and a hardcoded system-bus dependency; see
+  Phase 3 evidence). Was 166/3 before Phase 0; Phase 0 added 21 tests, Phase 1
+  added 9, Phase 3 added a further handful while fixing the 3 failures.
 - The Tier-B smoke reaches the core lifecycle, but ignores failures in terminal
   launch and finalization and therefore can report a false success.
 - wsmr and uwsm currently use the same unit namespace. Phase 0's file-level
@@ -51,8 +57,11 @@ verification command or evidence in the phase's evidence section.
   both implemented and unit-tested (below), but **G0/G1 are not yet fully
   closed**: double-start refusal, reload-failure handling, and the
   generation-begin/end paths are only proven at the pure-logic level, not
-  against a live/mocked systemd user manager (needs the D-Bus test seam from
-  Phase 3, or a live/Tier-B run). Until that verification happens, still do
+  against a live/mocked systemd user manager. Phase 3 added an injectable
+  seam for the *system*-bus VT lookup only, not the *session*-bus
+  `SessionBus` wrapper these paths actually use — closing G0/G1 still needs
+  either a `SessionBus` mocking effort (not currently scheduled in any phase)
+  or a live/Tier-B run. Until that verification happens, still do
   not run wsmr `start` or destructive cleanup against the active account.
 
 ---
@@ -482,38 +491,109 @@ desktop entries, logind state, system bus, or XDG installation.
 Finding: tests set XDG variables to empty strings, but empty values correctly
 fall back to system defaults and can discover a host terminal.
 
-- [ ] Use populated temporary XDG trees or explicit nonexistent paths.
-- [ ] Avoid relying on the host's `/usr/share` contents.
-- [ ] Add fixtures for terminal and application discovery.
+- [x] Use populated temporary XDG trees or explicit nonexistent paths. Root
+  cause confirmed: `util::xdg::data_dirs`/`config_dirs` deliberately treat
+  `""` as *unset* (see their own tests) and fall back to the real
+  `/usr/local/share:/usr/share`/`/etc/xdg` — `app::terminal`'s failing tests
+  set `XDG_DATA_DIRS`/`XDG_CONFIG_DIRS` to `Some("")`, which never actually
+  suppressed the host's real `/usr/share/applications`. New
+  `testutil::NO_XDG_DIRS` (a guaranteed-nonexistent absolute path — a real,
+  non-empty value, so it's honored as "search here" and correctly excludes
+  the host) replaces every such `Some("")` in `app/find.rs` and
+  `app/terminal.rs`.
+- [x] Avoid relying on the host's `/usr/share` contents. Verified by the fix
+  itself: this is exactly what made `find_terminal_entry_from_list_and_scan`
+  and `neg_cache_records_non_terminals_and_finds_terminal` fail on the
+  CachyOS host (a real terminal on `/usr/share/applications` made "no
+  terminal found" assertions false) and pass everywhere else, including now.
+- [x] Add fixtures for terminal and application discovery — already present
+  (`myterm.desktop`/`editor.desktop`/`xdg-terminals.list` fixtures in
+  `app/terminal.rs`, `foo.desktop`/`bar.desktop` in `app/find.rs`); they were
+  fully deterministic once the `XDG_*_DIRS` leak was fixed, so no new
+  fixtures were needed.
 
 ### P3-02 Inject session/logind discovery
 
 Finding: a prepare test expects logind lookup to fail, but it succeeds on this
 machine.
 
-- [ ] Put session deduction behind a small injectable trait/wrapper.
-- [ ] Unit-test success, absence, malformed response, and transport failure.
-- [ ] Reserve the real system bus for Linux integration tests.
+- [x] Put session deduction behind a small injectable trait/wrapper. New
+  `sysd::dbus::SessionLookup` trait (`session_by_vt`), implemented for the
+  real `SystemBus` and mirrored by `session::prepare`'s
+  `deduce_session_with(env, vt, &impl SessionLookup)` — the same pattern
+  `session::check::Probes`/`Fake` already established for `check may-start`,
+  applied here to the one piece of `prepare-env` that needed it.
+  `deduce_session` itself stays a thin real-bus wrapper that resolves the VT
+  and delegates.
+- [x] Unit-test success, absence, and transport failure — `FakeLookup` in
+  `session::prepare`'s tests scripts all three outcomes deterministically.
+  "Malformed response" is **not** separately covered at the D-Bus-payload
+  level (e.g. a session with a non-numeric `VTNr`): that would need a fake
+  D-Bus peer (zbus supports p2p test connections, but standing one up for
+  `org.freedesktop.login1.Manager`/`.Session` wasn't done here). Note that
+  `SystemBus::session_by_vt`'s real implementation already treats a failure
+  to read one session's `VTNr` property as "doesn't match" rather than fatal
+  (`if let Ok(v) = self.session_vtnr(...)`), so a malformed *individual*
+  session entry was already handled gracefully before this phase — what's
+  untested is that specific tolerance, not the overall correctness.
+- [x] Reserve the real system bus for Linux integration tests. `deduce_session`
+  (the real-bus wrapper) carries the same "Linux-runtime; unverified until
+  the integration phase" status as the rest of the bus-touching code in this
+  crate — unchanged, just now with its actual decision logic unit-tested via
+  the trait instead of being untestable end to end.
 
 ### P3-03 Complete host-independence audit
 
-- [ ] Audit tests for real environment variables, filesystem locations, PATH,
-  locale, system buses, and running services.
-- [ ] Route process-global environment mutation through the serialized test
-  helper required by Rust 2024.
-- [ ] Verify the suite on macOS and more than one Linux image.
+- [x] Audit tests for real environment variables, filesystem locations, PATH,
+  locale, system buses, and running services. Findings: (1) `set_var`/
+  `remove_var` occur *only* inside `testutil::with_env` — confirmed by
+  grepping the whole crate, so the next bullet was already satisfied; (2) the
+  P3-01 XDG-dirs leak (fixed above) was the one real bug found; (3) PATH-
+  dependent tests (`util::which`, desktop-entry `Exec`/`TryExec` resolution)
+  rely only on `sh`/`/bin/sh` existing (already commented in `util::tests` as
+  true "on every unix dev host + container") and a name essentially
+  guaranteed not to exist — reviewed, not a real host coupling; (4) the one
+  locale test (`app::entry::tests::locale_variants_expands`) already
+  overrides all three of `LC_ALL`/`LC_MESSAGES`/`LANG` via `with_env`,
+  matching exactly what the code under test reads; (5) no test starts or
+  depends on a running service beyond the D-Bus/logind paths covered by
+  P3-02; a few tests reference `/etc/hostname`/`/etc/hosts` as argument
+  strings, but nothing in the code path under test stats or reads them —
+  they're arbitrary illustrative path values, not a real dependency, and
+  were left as-is.
+- [x] Route process-global environment mutation through the serialized test
+  helper required by Rust 2024 — already true crate-wide (see above); no
+  change needed.
+- [!] Verify the suite on macOS and more than one Linux image. Not done in
+  this session: the environment this work ran in is native CachyOS Linux
+  (matching the project's documented baseline host), with no macOS machine
+  and no second Linux base image available to test against. Only the one
+  Debian `Containerfile` image was exercised (see evidence below). Genuinely
+  open — flag if a macOS/second-distro check is wanted before relying on
+  this.
 
 Acceptance criteria:
 
-- [ ] `cargo test` passes on the CachyOS host.
-- [ ] Tier-A Linux tests pass in a clean container.
-- [ ] Repeated/randomized test ordering produces the same result.
+- [x] `cargo test` passes on the CachyOS host — 201 passed, 0 failed (native).
+- [x] Tier-A Linux tests pass in a clean container — 201 passed, 0 failed
+  (`scripts/linux-test.sh`, Debian `Containerfile`).
+- [x] Repeated/randomized test ordering produces the same result. `cargo
+  test` run 3× consecutively and once with `--test-threads=1`: 201/201 every
+  time. `--shuffle` (nightly-only, `-Z unstable-options`) isn't available on
+  this stable toolchain, so true randomized-order verification wasn't
+  possible; multi-threaded (default) vs. single-threaded agreement is the
+  evidence actually gathered.
 
 Phase 3 evidence:
 
-- [ ] macOS/unit result:
-- [ ] CachyOS result:
-- [ ] Container result:
+- [!] macOS/unit result: not gathered — no macOS environment available this
+  session (see the `[!]` note above).
+- [x] CachyOS result: `cargo test` — 201 passed, 0 failed. `cargo clippy
+  --all-targets --all-features -- -D warnings` and `cargo fmt --check` both
+  clean.
+- [x] Container result: `scripts/linux-test.sh` — 201 passed, 0 failed.
+  `scripts/linux-build.sh` (`cargo build --all-targets` + `cargo clippy
+  --all-targets -- -D warnings`) exits 0.
 
 ---
 

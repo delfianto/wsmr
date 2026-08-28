@@ -429,7 +429,24 @@ impl SystemBus {
         }
         Ok(None)
     }
+}
 
+/// Session/logind lookup used by [`crate::session::prepare::deduce_session`],
+/// abstracted so its branching logic is unit-testable without a live system
+/// bus. `SystemBus` is the production implementation; tests inject a fake.
+/// See `session::check::Probes` for the same pattern applied more broadly.
+pub trait SessionLookup {
+    /// Resolve `(session_id, seat)` for the login session on `vt`, if any.
+    fn session_by_vt(&self, vt: u32) -> Result<Option<(String, String)>>;
+}
+
+impl SessionLookup for SystemBus {
+    fn session_by_vt(&self, vt: u32) -> Result<Option<(String, String)>> {
+        SystemBus::session_by_vt(self, vt)
+    }
+}
+
+impl SystemBus {
     fn systemd(&self) -> Result<SystemdManagerProxyBlocking<'_>> {
         Ok(SystemdManagerProxyBlocking::new(&self.conn)?)
     }
