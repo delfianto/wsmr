@@ -63,11 +63,9 @@ impl DesktopEntry {
     /// Locale-resolved, escape-expanded value of `key` (falls back to unlocalized).
     pub fn get_localized(&self, key: &str, action: Option<&str>) -> Option<String> {
         let g = self.group(action)?;
-        if let Some(loc) = locale() {
-            for cand in locale_variants(&loc) {
-                if let Some(v) = g.get(&format!("{key}[{cand}]")) {
-                    return Some(expand_str(v));
-                }
+        for cand in locale_variant_chain() {
+            if let Some(v) = g.get(&format!("{key}[{cand}]")) {
+                return Some(expand_str(v));
             }
         }
         g.get(key).map(|v| expand_str(v))
@@ -101,9 +99,25 @@ impl DesktopEntry {
         split_list(self.get("Categories", None))
     }
 
-    /// Basic validity: not hidden, `TryExec` resolves, action exists, and the
-    /// `Exec` command is on `$PATH`.
+    /// Basic validity: `Type=Application` with a non-empty `Name`, not
+    /// hidden, `TryExec` resolves, the action (if any) has its own group with
+    /// a `Name` and `Exec`, and the effective `Exec` command is on `$PATH`.
+    /// Ports `check_entry_basic`'s non-pyxdg-validation checks
+    /// (`main.py:429`) — the required-`Type`/`Name` and action-group/
+    /// action-`Name`/action-`Exec` checks below are the ones pyxdg's own
+    /// `entry.validate()` would otherwise catch, which this parser doesn't
+    /// separately replicate (see module docs: "the subset of pyxdg... that
+    /// wsmr needs").
     pub fn check_basic(&self, action: Option<&str>) -> Result<()> {
+        if self.get("Type", None) != Some("Application") {
+            return Err(Error::InvalidArg(format!(
+                "{} is not Type=Application",
+                self.filename
+            )));
+        }
+        if self.get("Name", None).is_none_or(str::is_empty) {
+            return Err(Error::InvalidArg(format!("{} has no Name", self.filename)));
+        }
         if self.get("Hidden", None) == Some("true") {
             return Err(Error::InvalidArg(format!("{} is hidden", self.filename)));
         }
@@ -116,17 +130,36 @@ impl DesktopEntry {
                 self.filename
             )));
         }
-        if let Some(a) = action
-            && !self.actions().iter().any(|x| x == a)
-        {
-            return Err(Error::InvalidArg(format!(
-                "{} has no action {a}",
-                self.filename
-            )));
+        if let Some(a) = action {
+            if !self.actions().iter().any(|x| x == a) {
+                return Err(Error::InvalidArg(format!(
+                    "{} has no action {a}",
+                    self.filename
+                )));
+            }
+            let Some(group) = self.group(Some(a)) else {
+                return Err(Error::InvalidArg(format!(
+                    "{} has no action group for {a}",
+                    self.filename
+                )));
+            };
+            if group.get("Name").is_none_or(|v| v.is_empty()) {
+                return Err(Error::InvalidArg(format!(
+                    "{} action {a} does not have Name",
+                    self.filename
+                )));
+            }
+            if group.get("Exec").is_none_or(|v| v.is_empty()) {
+                return Err(Error::InvalidArg(format!(
+                    "{} action {a} does not have Exec",
+                    self.filename
+                )));
+            }
         }
         let exec = self.exec(action)?;
         let cmd = exec
             .first()
+            .filter(|c| !c.is_empty())
             .ok_or_else(|| Error::InvalidArg(format!("{}: empty Exec", self.filename)))?;
         if util::which(cmd).is_none() {
             return Err(Error::InvalidArg(format!(
@@ -174,20 +207,48 @@ fn split_colon(s: &str) -> Vec<String> {
         .collect()
 }
 
-fn locale() -> Option<String> {
-    for v in ["LC_MESSAGES", "LANG", "LC_ALL"] {
-        if let Ok(s) = std::env::var(v)
+/// Resolve locale candidates by XDG's own precedence — `LANGUAGE`, `LC_ALL`,
+/// `LC_MESSAGES`, `LANG`, first non-empty wins outright (no merging across
+/// vars) — ported from `xdg.Locale.expand_languages`'s env lookup, the
+/// reference implementation upstream desktop-entry localization relies on
+/// (confirmed by reading `/usr/lib/python3.14/site-packages/xdg/Locale.py`
+/// on the dev host, where `python-pyxdg` is installed). `LANGUAGE` is the
+/// one that's meaningfully colon-separated (a preference list); splitting
+/// the others on `:` is harmless since a locale value never contains one.
+fn locale_candidates() -> Vec<String> {
+    for var in ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(s) = std::env::var(var)
             && !s.is_empty()
-            && s != "C"
-            && s != "POSIX"
         {
-            return Some(s);
+            return s
+                .split(':')
+                .filter(|v| !v.is_empty())
+                .map(String::from)
+                .collect();
         }
     }
-    None
+    Vec::new()
 }
 
-/// `de_DE.UTF-8@mod` -> ["de_DE@mod","de_DE","de@mod","de"] (best-effort).
+/// Every locale variant to try, across every candidate language, deduped in
+/// first-seen order — ports `expand_languages`'s outer accumulation loop.
+fn locale_variant_chain() -> Vec<String> {
+    let mut out = Vec::new();
+    for lang in locale_candidates() {
+        for variant in locale_variants(&lang) {
+            if !out.contains(&variant) {
+                out.push(variant);
+            }
+        }
+    }
+    out
+}
+
+/// `de_DE.UTF-8@mod` -> ["de_DE@mod","de_DE","de@mod","de"]. Ports
+/// `xdg.Locale._expand_lang`'s component-subset expansion (language,
+/// territory, and modifier parsed independently; the codeset is parsed out
+/// and discarded — pyxdg's own reference implementation never actually
+/// includes it in a candidate, despite detecting it).
 fn locale_variants(loc: &str) -> Vec<String> {
     let no_codeset = loc.split('.').next().unwrap_or(loc); // strip .UTF-8
     let (base, modifier) = match no_codeset.split_once('@') {
@@ -255,21 +316,47 @@ Exec=firefox --new-window
 
     #[test]
     fn hidden_fails_basic() {
-        let e =
-            DesktopEntry::parse("/x/h.desktop", "[Desktop Entry]\nExec=sh\nHidden=true\n").unwrap();
+        let e = DesktopEntry::parse(
+            "/x/h.desktop",
+            "[Desktop Entry]\nType=Application\nName=H\nExec=sh\nHidden=true\n",
+        )
+        .unwrap();
         assert!(e.check_basic(None).is_err());
+    }
+
+    #[test]
+    fn missing_type_or_name_fails_basic() {
+        let no_type =
+            DesktopEntry::parse("/x/nt.desktop", "[Desktop Entry]\nName=X\nExec=sh\n").unwrap();
+        assert!(no_type.check_basic(None).is_err());
+        let no_name = DesktopEntry::parse(
+            "/x/nn.desktop",
+            "[Desktop Entry]\nType=Application\nExec=sh\n",
+        )
+        .unwrap();
+        assert!(no_name.check_basic(None).is_err());
+        let empty_name = DesktopEntry::parse(
+            "/x/en.desktop",
+            "[Desktop Entry]\nType=Application\nName=\nExec=sh\n",
+        )
+        .unwrap();
+        assert!(empty_name.check_basic(None).is_err());
     }
 
     #[test]
     fn missing_exec_binary_fails_basic() {
         let e = DesktopEntry::parse(
             "/x/m.desktop",
-            "[Desktop Entry]\nExec=definitely-not-a-real-binary-xyz\n",
+            "[Desktop Entry]\nType=Application\nName=M\nExec=definitely-not-a-real-binary-xyz\n",
         )
         .unwrap();
         assert!(e.check_basic(None).is_err());
         // a real binary passes
-        let e2 = DesktopEntry::parse("/x/ok.desktop", "[Desktop Entry]\nExec=sh\n").unwrap();
+        let e2 = DesktopEntry::parse(
+            "/x/ok.desktop",
+            "[Desktop Entry]\nType=Application\nName=OK\nExec=sh\n",
+        )
+        .unwrap();
         assert!(e2.check_basic(None).is_ok());
     }
 
@@ -320,14 +407,14 @@ Exec=firefox --new-window
     fn tryexec_discards_when_missing() {
         let e = DesktopEntry::parse(
             "/x/tx.desktop",
-            "[Desktop Entry]\nExec=sh\nTryExec=definitely-not-real-bin-xyz\n",
+            "[Desktop Entry]\nType=Application\nName=TX\nExec=sh\nTryExec=definitely-not-real-bin-xyz\n",
         )
         .unwrap();
         assert!(e.check_basic(None).is_err());
         // TryExec that resolves passes
         let ok = DesktopEntry::parse(
             "/x/tx2.desktop",
-            "[Desktop Entry]\nExec=sh\nTryExec=/bin/sh\n",
+            "[Desktop Entry]\nType=Application\nName=TX2\nExec=sh\nTryExec=/bin/sh\n",
         )
         .unwrap();
         assert!(ok.check_basic(None).is_ok());
@@ -338,11 +425,38 @@ Exec=firefox --new-window
         // Exec=sh so the executable check passes; isolates the action check.
         let e = DesktopEntry::parse(
             "/x/a.desktop",
-            "[Desktop Entry]\nExec=sh\nActions=go;\n[Desktop Action go]\nExec=sh\n",
+            "[Desktop Entry]\nType=Application\nName=A\nExec=sh\nActions=go;\n[Desktop Action go]\nName=Go\nExec=sh\n",
         )
         .unwrap();
         assert!(e.check_basic(Some("no-such-action")).is_err());
         assert!(e.check_basic(Some("go")).is_ok());
+    }
+
+    #[test]
+    fn action_without_group_name_or_exec_rejected() {
+        // action listed in Actions= but its own group is missing entirely
+        let no_group = DesktopEntry::parse(
+            "/x/ng.desktop",
+            "[Desktop Entry]\nType=Application\nName=NG\nExec=sh\nActions=go;\n",
+        )
+        .unwrap();
+        assert!(no_group.check_basic(Some("go")).is_err());
+
+        // action group present but missing Name
+        let no_name = DesktopEntry::parse(
+            "/x/nan.desktop",
+            "[Desktop Entry]\nType=Application\nName=N\nExec=sh\nActions=go;\n[Desktop Action go]\nExec=sh\n",
+        )
+        .unwrap();
+        assert!(no_name.check_basic(Some("go")).is_err());
+
+        // action group present but missing Exec
+        let no_exec = DesktopEntry::parse(
+            "/x/nae.desktop",
+            "[Desktop Entry]\nType=Application\nName=N\nExec=sh\nActions=go;\n[Desktop Action go]\nName=Go\n",
+        )
+        .unwrap();
+        assert!(no_exec.check_basic(Some("go")).is_err());
     }
 
     #[test]
@@ -352,6 +466,7 @@ Exec=firefox --new-window
         let e = entry();
         with_env(
             &[
+                ("LANGUAGE", None),
                 ("LC_ALL", None),
                 ("LC_MESSAGES", None),
                 ("LANG", Some("de_DE.UTF-8")),
@@ -360,13 +475,58 @@ Exec=firefox --new-window
         );
         // C locale → unlocalized
         with_env(
-            &[("LC_ALL", None), ("LC_MESSAGES", None), ("LANG", Some("C"))],
+            &[
+                ("LANGUAGE", None),
+                ("LC_ALL", None),
+                ("LC_MESSAGES", None),
+                ("LANG", Some("C")),
+            ],
             || {
                 assert_eq!(
                     e.get_localized("Name", None).as_deref(),
                     Some("Web Browser")
                 )
             },
+        );
+    }
+
+    /// P5-02: precedence must be `LANGUAGE`, then `LC_ALL`, then
+    /// `LC_MESSAGES`, then `LANG` — first *set* var wins outright, matching
+    /// `xdg.Locale.expand_languages` exactly (cross-checked against the
+    /// installed `python-pyxdg` source, not just the fix-plan wording).
+    #[test]
+    fn locale_precedence_language_then_lc_all_then_lc_messages_then_lang() {
+        use crate::testutil::with_env;
+        let e = entry();
+        // LC_ALL beats LC_MESSAGES and LANG
+        with_env(
+            &[
+                ("LANGUAGE", None),
+                ("LC_ALL", Some("de_DE")),
+                ("LC_MESSAGES", Some("fr_FR")),
+                ("LANG", Some("fr_FR")),
+            ],
+            || assert_eq!(e.get_localized("Name", None).as_deref(), Some("Webbrowser")),
+        );
+        // LC_MESSAGES beats LANG when LC_ALL is unset
+        with_env(
+            &[
+                ("LANGUAGE", None),
+                ("LC_ALL", None),
+                ("LC_MESSAGES", Some("de_DE")),
+                ("LANG", Some("fr_FR")),
+            ],
+            || assert_eq!(e.get_localized("Name", None).as_deref(), Some("Webbrowser")),
+        );
+        // LANGUAGE beats everything, including a colon-separated list
+        with_env(
+            &[
+                ("LANGUAGE", Some("de:fr")),
+                ("LC_ALL", Some("fr_FR")),
+                ("LC_MESSAGES", None),
+                ("LANG", None),
+            ],
+            || assert_eq!(e.get_localized("Name", None).as_deref(), Some("Webbrowser")),
         );
     }
 
@@ -379,5 +539,16 @@ Exec=firefox --new-window
         // codeset is stripped (best-effort): everything after the first '.'
         assert_eq!(locale_variants("de_DE.UTF-8"), vec!["de_DE", "de"]);
         assert_eq!(locale_variants("fr"), vec!["fr"]);
+    }
+
+    #[test]
+    fn locale_candidates_splits_language_on_colon() {
+        use crate::testutil::with_env;
+        with_env(
+            &[("LANGUAGE", Some("de_DE:fr_FR")), ("LC_ALL", None)],
+            || {
+                assert_eq!(locale_candidates(), vec!["de_DE", "fr_FR"]);
+            },
+        );
     }
 }

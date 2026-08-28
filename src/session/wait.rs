@@ -60,6 +60,14 @@ pub fn waitenv(bus: &SessionBus, varnames: &[String], timeout: Duration) -> Resu
 /// Block until `pid` exits, via `pidfd_open(2)` + `poll(2)` (Linux only).
 #[cfg(target_os = "linux")]
 pub fn waitpid(pid: i32) -> Result<()> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    // pidfd_open itself would just fail with EINVAL on this, but a dedicated
+    // check gives a clearer error and avoids the syscall entirely (P5-05).
+    if pid <= 0 {
+        return Err(Error::InvalidArg(format!("invalid PID: {pid}")));
+    }
+
     // SAFETY: pidfd_open is a thin syscall; -1 signals failure (checked below).
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
     if fd < 0 {
@@ -70,22 +78,29 @@ pub fn waitpid(pid: i32) -> Result<()> {
         }
         return Err(Error::io("pidfd_open", e));
     }
-    let fd = fd as libc::c_int;
+    // Owned so every exit below — including the EINTR-retry loop growing a
+    // new return path later — closes it exactly once, automatically (P5-05).
+    // SAFETY: `fd` was just returned by a successful pidfd_open, so it's a
+    // valid, currently-unowned, open file descriptor.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd as libc::c_int) };
     let mut pfd = libc::pollfd {
-        fd,
+        fd: fd.as_raw_fd(),
         events: libc::POLLIN,
         revents: 0,
     };
-    // SAFETY: poll on one valid fd; blocks until the pid's pidfd is readable.
-    let rc = unsafe { libc::poll(&mut pfd, 1, -1) };
-    // SAFETY: closing our own fd.
-    unsafe {
-        libc::close(fd);
+    loop {
+        // SAFETY: poll on one valid fd (owned by `fd`, alive for this call);
+        // blocks until the pid's pidfd is readable.
+        let rc = unsafe { libc::poll(&mut pfd, 1, -1) };
+        if rc >= 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        if e.raw_os_error() == Some(libc::EINTR) {
+            continue; // interrupted by a signal, not a real failure — retry
+        }
+        return Err(Error::io("poll", e));
     }
-    if rc < 0 {
-        return Err(Error::io("poll", std::io::Error::last_os_error()));
-    }
-    Ok(())
 }
 
 /// Non-Linux stub: pidfd is Linux-only.
@@ -131,6 +146,14 @@ mod tests {
     fn waitpid_dead_pid_is_ok() {
         // A PID that almost certainly doesn't exist → pidfd_open ESRCH → Ok.
         assert!(waitpid(2_000_000_000).is_ok());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn waitpid_rejects_non_positive_pids() {
+        // P5-05: validated before the syscall, not left to a raw EINVAL.
+        assert!(waitpid(0).is_err());
+        assert!(waitpid(-1).is_err());
     }
 
     #[cfg(target_os = "linux")]

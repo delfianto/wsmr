@@ -45,15 +45,15 @@ verification command or evidence in the phase's evidence section.
 - Host: CachyOS, Wayland, Hyprland 0.56.2, systemd 261, dbus-broker.
 - The active desktop is managed by uwsm 0.26.7, not wsmr.
 - Formatting, clippy, and build checks pass.
-- Unit tests currently report **222 passing, 0 failing** (206 lib + 16 in the
-  `wsmr` binary's own test target, the latter new in Phase 2) — the 3
-  originally pre-existing host-dependent failures were root-caused and fixed
-  in Phase 3 (an XDG-dirs test-isolation bug and a hardcoded system-bus
-  dependency). Was 166/3 before Phase 0. Verified in both the native CachyOS
-  host and the clean Linux container after every phase, including Phase 2,
-  where the container caught a genuinely new host-dependence bug this
-  session introduced (see Phase 2 evidence) — the two-environment habit paid
-  for itself.
+- Unit tests currently report **233 passing, 0 failing** (215 lib + 18 in the
+  `wsmr` binary's own test target) — the 3 originally pre-existing
+  host-dependent failures were root-caused and fixed in Phase 3 (an
+  XDG-dirs test-isolation bug and a hardcoded system-bus dependency). Was
+  166/3 before Phase 0. Verified in both the native CachyOS host and the
+  clean Linux container after every phase, including Phase 2, where the
+  container caught a genuinely new host-dependence bug this session
+  introduced (see Phase 2 evidence) — the two-environment habit paid for
+  itself.
 - The Tier-B smoke reaches the core lifecycle, but ignores failures in terminal
   launch and finalization and therefore can report a false success.
 - wsmr and uwsm currently use the same unit namespace. Phase 0's file-level
@@ -789,57 +789,212 @@ Phase 4 evidence:
 
 ## Phase 5 — P2 protocol and syscall hardening
 
+**Ground truth used:** as in Phase 2, cross-checked against real installed
+references rather than memory — uwsm 0.26.7's actual `main.py` (`path2url`,
+`entry_expand_str`, `entry_tokenize_exec`, `check_entry_basic`), and, for
+locale precedence/expansion (which uwsm itself delegates to, not implements),
+`python-pyxdg`'s real `xdg/Locale.py` (also installed on the dev host).
+Several outputs below (percent-encoding, locale variant lists) were also
+cross-checked against live `python3` invocations, not just source reading.
+
 ### P5-01 Correct file URL conversion
 
-- [ ] Percent-encode spaces, non-ASCII bytes, and reserved characters correctly.
-- [ ] Preserve already valid URI schemes where required.
-- [ ] Define relative-path behavior.
-- [ ] Add table tests for Unicode, spaces, `#`, `%`, and malformed input.
+- [x] Percent-encode spaces, non-ASCII bytes, and reserved characters
+  correctly. `app::field::percent_encode` ports Python's
+  `urllib.parse.quote(arg)` (default `safe="/"`) byte-for-byte: every UTF-8
+  byte outside `A-Za-z0-9_.~-/` becomes uppercase `%XX`.
+- [x] Preserve already valid URI schemes where required. `has_uri_scheme`
+  ports `urlparse(s).scheme`'s truthiness (RFC 3986 §3.1 scheme grammar),
+  including its permissive edge case (`"a:b"` reads as scheme `"a"` in both
+  implementations — replicated for compatibility, not "fixed").
+  Byte-identical to the *actual* upstream (`path2url`, `main.py:2945`) rather
+  than the ad-hoc `arg.contains("://")` check this replaced.
+- [x] Define relative-path behavior. Matches upstream exactly by *not*
+  resolving relative paths against the current directory at all — upstream's
+  `path2url` never does either; a relative arg becomes
+  `file://relative/path` verbatim. wsmr previously did resolve against `cwd`,
+  which was itself the "undefined behavior" the finding was about; now it's
+  defined by matching upstream's non-resolution rather than inventing a new
+  rule.
+- [x] Add table tests for Unicode, spaces, `#`, `%`, and malformed input.
+  `path2url_table` — every row cross-checked against a real `python3
+  -c "urllib.parse.quote(...)"` invocation, not derived from the Rust code.
 
 ### P5-02 Correct locale handling
 
-- [ ] Apply precedence `LC_ALL`, then `LC_MESSAGES`, then `LANG`.
-- [ ] Parse language, territory, codeset, and modifier independently.
-- [ ] Preserve modifiers in values such as `de_DE.UTF-8@mod`.
-- [ ] Add localization fallback table tests.
+- [x] Apply precedence `LC_ALL`, then `LC_MESSAGES`, then `LANG`. Fixed a
+  real, exactly-backwards bug: `locale()` checked `LC_MESSAGES`, `LANG`,
+  `LC_ALL` in that (wrong) order. Went further than the fix-plan's literal
+  3-var ask after finding the true reference (`xdg.Locale.expand_languages`):
+  real precedence is `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG` — first
+  *set* var wins outright (no merging). `LANGUAGE` (a GNU gettext extension,
+  colon-separated preference list) is now supported too.
+- [x] Parse language, territory, codeset, and modifier independently.
+  Already correct pre-existing code (`locale_variants`) — verified by
+  hand-tracing pyxdg's real `_expand_lang` bitmask-subset algorithm against
+  it component-by-component; every combination matches exactly, including
+  the fact that pyxdg's own reference implementation parses out the codeset
+  but never actually includes it in any candidate (a latent quirk in the
+  *reference*, not a bug to fix in the port).
+- [x] Preserve modifiers in values such as `de_DE.UTF-8@mod`. Already correct
+  (see above) — `locale_variants("de_DE@euro")` producing
+  `[de_DE@euro, de_DE, de@euro, de]` matches pyxdg's real output exactly.
+- [x] Add localization fallback table tests.
+  `locale_precedence_language_then_lc_all_then_lc_messages_then_lang` (new,
+  covers the precedence fix) and `locale_candidates_splits_language_on_colon`
+  (new); `locale_variants_expands` (pre-existing) already covered the
+  expansion algorithm.
 
 ### P5-03 Strengthen desktop-entry parsing
 
-- [ ] Validate `Type=Application` and required fields.
-- [ ] Validate action groups and action `Name`/`Exec` fields.
-- [ ] Test quoting, field codes, escaping, and backslash expansion.
-- [ ] Compare behavior against the upstream/reference fixture set.
+- [x] Validate `Type=Application` and required fields. `check_basic` now
+  requires `Type=Application` and a non-empty `Name` — previously unchecked
+  entirely, so a `Type=Link`/`Type=Directory` entry (or one missing `Name`,
+  a spec-required key) would proceed straight to Exec resolution and fail
+  with a confusing "no Exec"/"missing executable" message instead of a clear
+  one naming the actual problem.
+- [x] Validate action groups and action `Name`/`Exec` fields. Fixed a real
+  gap found while reading upstream's `check_entry_basic`: it checks the
+  action group (`[Desktop Action X]`) actually *exists*, not just that the
+  id is listed in `Actions=`, and requires the action's own `Name` and
+  `Exec` to be present and non-empty — none of which wsmr's `check_basic`
+  did before this phase (it only checked `Actions=` list membership).
+- [x] Test quoting, field codes, escaping, and backslash expansion.
+  `expand_escapes` extended (`\t`/`\r`/unknown-escape-passthrough/trailing
+  lone backslash); new `tokenize_reserved_chars_table` exercises every
+  character in upstream's exact reserved-char string
+  (`main.py:386`: `` "\t\n'\\><~|&;$*?#()`" ``) both unquoted (rejected) and
+  quoted (accepted, except backtick/`$`); new tests in `entry.rs` for the
+  Type/Name/action-group/action-Name/action-Exec validation added above.
+- [x] Compare behavior against the upstream/reference fixture set. Did this
+  for all three functions in `app/field.rs`
+  (`expand_str`/`tokenize_exec`/`path2url`) by reading upstream's actual
+  implementations line-by-line: `expand_str` and `tokenize_exec` were
+  *already* faithful ports (confirmed, no changes needed); `path2url` needed
+  the P5-01 fix. `check_basic` was compared against `check_entry_basic`
+  (`main.py:429`), surfacing the Type/action-group gaps above.
 
 ### P5-04 Bound systemd and app-daemon waits
 
-- [ ] Add a deadline to systemd job waits and include job/unit context in timeout
-  errors.
-- [ ] Prefer the systemd job-removed signal where practical.
-- [ ] Prevent FIFO output from blocking forever when no reader exists.
-- [ ] Define timeout/cancellation behavior for app-daemon communication.
+- [x] Add a deadline to systemd job waits and include job/unit context in
+  timeout errors. `SessionBus::wait_for_job` gained a `timeout: Duration`
+  parameter (was an unbounded `loop`) and a `unit: &str` parameter purely
+  for the timeout error message (systemd job objects don't carry the unit
+  name back). Its one caller, `stop_wm`, uses a 20s timeout — comfortably
+  above `wayland-wm@.service`'s own `TimeoutStopSec=10`, since the wait
+  covers the whole cascading session teardown, not just that one unit.
+  Note: upstream's own equivalent (`stop_wm`, `main.py:4394`) is *also* an
+  unbounded `while True` — this is wsmr choosing to be more robust than
+  upstream here, not matching a bug upstream has.
+- [!] Prefer the systemd job-removed signal where practical. Not done:
+  documented instead as a deliberate deferral (in `wait_for_job`'s doc
+  comment) — implementing it would mean introducing zbus's async
+  signal-stream API into what is otherwise an entirely synchronous,
+  blocking-`zbus::blocking`-only codebase, a materially bigger architectural
+  change than this phase's bounded-wait fix warrants. Polling `ListJobs`
+  every 100ms, now bounded, was judged the right scope here.
+- [x] Prevent FIFO output from blocking forever when no reader exists. Real
+  bug, confirmed by tracing FIFO open semantics: `app::daemon::send` used to
+  call `std::fs::write`, which blocks *opening* a FIFO for writing until a
+  reader appears — a client that gave up (or crashed) between sending its
+  request and reading the reply would wedge the daemon's *entire* loop
+  forever on a write nobody will ever read. New
+  `open_fifo_for_write_bounded`: retries a non-blocking (`O_NONBLOCK`) open
+  until a 5s timeout, then clears `O_NONBLOCK` before the actual write
+  (safe once a reader is confirmed present). Every reply site in the main
+  loop now goes through `send_reply`, which logs and continues on failure
+  instead of propagating via `?` — a single slow/dead client must not take
+  the daemon down.
+- [x] Define timeout/cancellation behavior for app-daemon communication.
+  Defined for the side that exists (the daemon's own reply-write path, just
+  above). The *client* side of this FIFO protocol isn't implemented in wsmr
+  yet (confirmed: no code anywhere references
+  `wsmr-app-daemon-in`/`-out` outside `daemon.rs` itself — it's still the
+  optional "M7" fast path per `docs/uwsm-core-analysis.md`), so there's
+  nothing further to bound there yet.
 
 ### P5-05 Harden low-level operations
 
-- [ ] Retry `poll` on `EINTR`.
-- [ ] Use owned file-descriptor types so all exits close descriptors.
-- [ ] Validate PIDs before waiting.
-- [ ] Check and propagate `dup2` failures.
-- [ ] Keep unsafe blocks isolated with `// SAFETY:` justification.
-- [ ] Avoid lossy conversion of non-UTF-8 executable paths; reject them with a
-  contextual error if the unit format cannot represent them.
-- [ ] Distinguish systemd `NoSuchUnit` from D-Bus transport/auth failures.
+- [x] Retry `poll` on `EINTR`. `waitpid`'s poll call previously treated
+  `EINTR` as a hard failure; now retries in a loop, returning only on a
+  genuine error or success.
+- [x] Use owned file-descriptor types so all exits close descriptors.
+  `waitpid`'s pidfd is now a `std::os::fd::OwnedFd` (auto-closes on every
+  return path, including the new retry loop) instead of a raw `c_int`
+  manually `libc::close`'d at one specific point in the old, simpler control
+  flow.
+- [x] Validate PIDs before waiting. `waitpid` now rejects `pid <= 0`
+  (`Error::InvalidArg`) before the `pidfd_open` syscall, rather than
+  surfacing a raw `EINVAL` — matters because this PID reaches `waitpid` as
+  direct, unvalidated CLI input (`aux waitpid <PID>`).
+- [x] Check and propagate `dup2` failures. `start::run`'s
+  `dup2(1,3)`/`dup2(2,4)` return values were previously discarded; both are
+  now checked and turned into a contextual `Error::io`.
+- [x] Keep unsafe blocks isolated with `// SAFETY:` justification. Audited:
+  every `unsafe` block/fn in the crate already carries one (verified by a
+  script scanning all `unsafe {`/`unsafe fn` sites crate-wide for a nearby
+  `SAFETY` comment — zero misses). No changes needed; this was already
+  solid practice.
+- [x] Avoid lossy conversion of non-UTF-8 executable paths; reject them with
+  a contextual error if the unit format cannot represent them. New
+  `path_to_unit_string` replaces `.to_string_lossy()` at the two spots that
+  feed *every* generated unit's `ExecStart=`: `current_exe()` (wsmr's own
+  binary path, baked into literally every unit) and `apply_hardcode`'s
+  `which()`-resolved compositor path. A silent lossy conversion here
+  wouldn't just be imprecise — it would write a different, likely
+  nonexistent path into the unit that then fails to exec with no clear
+  cause; now it's a contextual error naming which path was rejected and why,
+  before any unit is written. One remaining `.to_string_lossy()` site was
+  reviewed and left as-is (`comp::MainArg`'s path-derived entry *id* — a
+  cosmetic label built from the basename, not the path actually used to open
+  the file, so lossy conversion there can't corrupt anything a unit file
+  depends on).
+- [x] Distinguish systemd `NoSuchUnit` from D-Bus transport/auth failures.
+  Real bug: `SystemBus::unit_active_state` treated *any* `get_unit` error
+  (transport failure, auth failure, anything) as "unit not active" —
+  meaning a genuine D-Bus outage during `start -g`'s graphical-target wait
+  would have silently looked identical to "system hasn't booted that far
+  yet" instead of surfacing as the real error it is. New `is_no_such_unit`
+  matches specifically on `zbus::Error::MethodError` named
+  `org.freedesktop.systemd1.NoSuchUnit`; only that specific case now reads
+  as "absent", everything else propagates.
 
 Acceptance criteria:
 
-- [ ] Timeout and EINTR tests are deterministic.
-- [ ] File-descriptor leak checks pass on Linux.
-- [ ] Desktop-entry and locale table tests cover the reported edge cases.
+- [x] Timeout and EINTR tests are deterministic. FIFO timeout:
+  `open_fifo_for_write_bounded_times_out_deterministically` measures real
+  wall-clock time against a real FIFO with no reader and asserts it's within
+  bounds (≥ the timeout, comfortably < 2s) — genuine timing verification,
+  not mocked. `waitpid`'s EINTR retry isn't independently signal-injection
+  tested (would need sending a real signal mid-`poll` from another thread,
+  judged disproportionate for a 3-line retry loop); `waitpid_dead_pid_is_ok`/
+  `waitpid_blocks_until_child_exits` (pre-existing) cover the surrounding
+  behavior on real Linux pidfds.
+- [~] File-descriptor leak checks pass on Linux. No dedicated FD-leak
+  checker (e.g. counting `/proc/self/fd` before/after) was added. Confidence
+  instead comes from the `OwnedFd` switch itself, which makes a leak a
+  compile-time-adjacent property (every path out of the function drops the
+  same owned value) rather than something to test for at runtime — judged
+  sufficient given the function's small size, but not the same as a
+  measured guarantee.
+- [x] Desktop-entry and locale table tests cover the reported edge cases.
+  See P5-01/02/03 above.
 
 Phase 5 evidence:
 
-- [ ] Unit tests:
-- [ ] Linux-specific tests:
-- [ ] Safety review:
+- [x] Unit tests: `cargo test` — 215 (lib) + 18 (main.rs) = 233 passed, 0
+  failed, both natively and in the Linux container
+  (`scripts/linux-test.sh`, 233/233). `cargo clippy --all-targets
+  --all-features -- -D warnings` and `cargo fmt --check` clean natively and
+  in-container (`scripts/linux-build.sh`).
+- [x] Linux-specific tests: the pidfd/poll tests (`waitpid_*`) and the app-
+  daemon FIFO tests (`open_fifo_for_write_bounded_*`, real `mkfifo` +
+  real blocking-open-with-a-delayed-reader) are Linux/Unix-only by
+  construction and ran in both the native CachyOS host and the container.
+- [x] Safety review: the crate-wide `unsafe`-block audit above (script-driven,
+  zero misses) doubles as this phase's safety review; every new `unsafe`
+  usage in this phase (`OwnedFd::from_raw_fd`, the `fcntl` clearing
+  `O_NONBLOCK` in `daemon.rs`) carries its own `// SAFETY:` justification.
 
 ---
 
@@ -985,7 +1140,9 @@ Phase 7 evidence:
   committed as of writing this line (commit follows this fix-plan update).
 - [x] `test: make the unit suite host-independent` — `3aadc94`.
 - [ ] `test: make Tier-B assertions functional`
-- [ ] `fix: harden desktop-entry and blocking syscall behavior`
+- [x] `fix: harden desktop-entry and blocking syscall behavior` — Phase 5,
+  not yet committed as of writing this line (commit follows this fix-plan
+  update).
 - [ ] `ci: run the Linux integration matrix`
 - [ ] `docs: align support, compatibility, and verification claims`
 - [ ] `test: add the disposable-user Hyprland live harness`

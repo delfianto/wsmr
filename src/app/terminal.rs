@@ -311,7 +311,7 @@ mod tests {
 
     fn term_entry(extra: &str) -> DesktopEntry {
         let content = format!(
-            "[Desktop Entry]\nType=Application\nExec=foot\nCategories=TerminalEmulator;\n{extra}"
+            "[Desktop Entry]\nType=Application\nName=Foot\nExec=foot\nCategories=TerminalEmulator;\n{extra}"
         );
         DesktopEntry::parse("/x/foot.desktop", &content).unwrap()
     }
@@ -442,7 +442,7 @@ mod tests {
         // a terminal whose Exec is on PATH (`sh`) so check_basic passes
         std::fs::write(
             apps.join("myterm.desktop"),
-            "[Desktop Entry]\nType=Application\nExec=sh\nCategories=TerminalEmulator;\n",
+            "[Desktop Entry]\nType=Application\nName=MyTerm\nExec=sh\nCategories=TerminalEmulator;\n",
         )
         .unwrap();
         // explicit preference file
@@ -498,7 +498,7 @@ mod tests {
         // (cache hit) and the terminal is never cached as a non-terminal.
         std::fs::write(
             apps.join("myterm.desktop"),
-            "[Desktop Entry]\nType=Application\nExec=sh\nCategories=TerminalEmulator;\n",
+            "[Desktop Entry]\nType=Application\nName=MyTerm\nExec=sh\nCategories=TerminalEmulator;\n",
         )
         .unwrap();
         with_env(&env, || {

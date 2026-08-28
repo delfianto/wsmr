@@ -100,20 +100,58 @@ pub fn tokenize_exec(value: &str) -> Result<Vec<String>> {
     Ok(cmd)
 }
 
-/// Convert a path to a `file://` URL, leaving existing URLs untouched.
+/// Convert a path to a `file://` URL, leaving an already-schemed URL (e.g.
+/// `https://…`) untouched. Ports `path2url` (`main.py:2945`) exactly,
+/// including what it deliberately does *not* do: a relative path is neither
+/// rejected nor resolved against the current directory — it's percent-encoded
+/// and prefixed as-is (`file://relative/path`), same as upstream. Callers
+/// that need an absolute URL must resolve the path before calling this.
 pub fn path2url(arg: &str) -> String {
-    if arg.contains("://") {
+    if has_uri_scheme(arg) {
         return arg.to_string();
     }
-    let p = std::path::Path::new(arg);
-    let abs = if p.is_absolute() {
-        arg.to_string()
-    } else {
-        std::env::current_dir()
-            .map(|d| d.join(arg).to_string_lossy().into_owned())
-            .unwrap_or_else(|_| arg.to_string())
+    format!("file://{}", percent_encode(arg))
+}
+
+/// Whether `s` starts with a URI scheme (`ALPHA *(ALPHA / DIGIT / "+" / "-" /
+/// ".") ":"`, RFC 3986 §3.1), matching the truthiness of Python's
+/// `urllib.parse.urlparse(s).scheme`. Deliberately permissive like upstream:
+/// e.g. a relative path component such as `"a:b"` is (mis)classified as
+/// scheme `"a"` in both implementations — replicated for compatibility, not
+/// "fixed", since callers pass whatever a desktop entry's `Exec` produced.
+fn has_uri_scheme(s: &str) -> bool {
+    let mut chars = s.char_indices();
+    let Some((_, first)) = chars.next() else {
+        return false;
     };
-    format!("file://{abs}")
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+    for (_, c) in chars {
+        if c == ':' {
+            return true;
+        }
+        if !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+            return false;
+        }
+    }
+    false
+}
+
+/// Percent-encode like Python's `urllib.parse.quote` with its default
+/// `safe="/"`: every byte outside `A-Za-z0-9_.~-` and `/` becomes `%XX`
+/// (uppercase hex), operating on `arg`'s UTF-8 bytes (so non-ASCII
+/// characters, not just spaces/reserved punctuation, are correctly encoded).
+fn percent_encode(arg: &str) -> String {
+    let mut out = String::with_capacity(arg.len());
+    for b in arg.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'~' | b'-' | b'/') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Expand the `Exec` argv + caller arguments into final command line(s).
@@ -264,8 +302,16 @@ mod tests {
     fn expand_escapes() {
         assert_eq!(expand_str("a\\sb"), "a b");
         assert_eq!(expand_str("a\\nb"), "a\nb");
+        assert_eq!(expand_str("a\\tb"), "a\tb");
+        assert_eq!(expand_str("a\\rb"), "a\rb");
         assert_eq!(expand_str("a\\\\b"), "a\\b");
         assert_eq!(expand_str("plain"), "plain");
+        // P5-03: an unknown escape drops the backslash and keeps the char,
+        // matching upstream's `.get(char, char)` fallback exactly (not an
+        // error, and not a literal `\x` passthrough).
+        assert_eq!(expand_str("a\\xb"), "axb");
+        // a trailing lone backslash has nothing to escape — dropped silently
+        assert_eq!(expand_str("a\\"), "a");
     }
 
     #[test]
@@ -278,6 +324,36 @@ mod tests {
     fn tokenize_rejects() {
         assert!(tokenize_exec("a;b").is_err()); // unquoted reserved
         assert!(tokenize_exec(r#""a $x""#).is_err()); // unescaped $ in quotes
+    }
+
+    /// P5-03: every reserved character from the spec's unquoted-char set,
+    /// cross-checked against upstream's exact set (`main.py:386`:
+    /// `"\t\n'\\><~|&;$*?#()`"`) — must be rejected unquoted, accepted quoted.
+    /// `\t`/`\n` are excluded from the unquoted-reject half: both tokenizers
+    /// treat them as plain argument-separating whitespace (checked *before*
+    /// the reserved-char rejection), never reaching that branch at all.
+    #[test]
+    fn tokenize_reserved_chars_table() {
+        for ch in "'\\><~|&;$*?#()`".chars() {
+            let unquoted = format!("cmd a{ch}b");
+            assert!(
+                tokenize_exec(&unquoted).is_err(),
+                "expected {ch:?} to be rejected unquoted"
+            );
+        }
+        // \t and \n are whitespace: split the argument, not rejected
+        assert_eq!(tokenize_exec("cmd a\tb").unwrap(), vec!["cmd", "a", "b"]);
+        assert_eq!(tokenize_exec("cmd a\nb").unwrap(), vec!["cmd", "a", "b"]);
+        // quoted, only backtick and $ are still rejected (need escaping)
+        for ch in "\t\n'><~|&;*?#()".chars() {
+            let quoted = format!(r#"cmd "a{ch}b""#);
+            assert!(
+                tokenize_exec(&quoted).is_ok(),
+                "expected {ch:?} to be accepted quoted"
+            );
+        }
+        assert!(tokenize_exec(r#"cmd "a`b""#).is_err());
+        assert!(tokenize_exec(r#"cmd "a\`b""#).is_ok());
     }
 
     #[test]
@@ -345,6 +421,33 @@ mod tests {
     fn url_conversion() {
         assert_eq!(path2url("https://x/y"), "https://x/y");
         assert_eq!(path2url("/a/b"), "file:///a/b");
+    }
+
+    /// Table-tested against Python's actual
+    /// `f"file://{urllib.parse.quote(arg)}"` / `urlparse(arg).scheme` output
+    /// (P5-01) — every row here was cross-checked against a real `python3`
+    /// invocation, not derived from the Rust implementation.
+    #[test]
+    fn path2url_table() {
+        let cases: &[(&str, &str)] = &[
+            ("/a b/c", "file:///a%20b/c"),                               // space
+            ("/a#b", "file:///a%23b"),                                   // reserved '#'
+            ("/a%b", "file:///a%25b"),                                   // literal '%' re-encoded
+            ("/h\u{e9}llo/w\u{f6}rld", "file:///h%C3%A9llo/w%C3%B6rld"), // Unicode (Latin-1 supplement)
+            (
+                "/\u{65e5}\u{672c}\u{8a9e}",
+                "file:///%E6%97%A5%E6%9C%AC%E8%AA%9E",
+            ), // Unicode (CJK, multi-byte UTF-8)
+            ("https://x/y", "https://x/y"),                              // already a URL, untouched
+            ("mailto:a@b.com", "mailto:a@b.com"),                        // scheme without `//`
+            ("a:b", "a:b"), // (mis)classified as scheme "a" — matches upstream
+            ("/a:b", "file:///a%3Ab"), // leading '/' disqualifies scheme detection
+            ("relative/path", "file://relative/path"), // no cwd resolution, matches upstream
+            ("", "file://"), // malformed/empty input
+        ];
+        for (input, expected) in cases {
+            assert_eq!(path2url(input), *expected, "input: {input:?}");
+        }
     }
 
     #[test]

@@ -481,7 +481,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wsmr-comp2-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("c.desktop");
-        std::fs::write(&path, "[Desktop Entry]\nName=Entry Name\nExec=sh\n").unwrap();
+        std::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=Entry Name\nExec=sh\n",
+        )
+        .unwrap();
         let input = ResolveInput {
             wm_cmdline: vec![path.to_string_lossy().into_owned()],
             name: Some("CLI Name".into()),

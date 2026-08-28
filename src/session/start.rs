@@ -133,11 +133,20 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
     // (7) become the session anchor: preserve real stdout/stderr on fd 3/4, then
     // replace ourselves with systemd-cat -> sh signal-handler.sh <envelope>
     let script = helpers::extract("signal-handler.sh")?;
-    // SAFETY: duplicate std fds to 3/4 so the shell handler can message past
-    // systemd-cat (which captures fd 1/2 into the journal).
+    // SAFETY: duplicating our own already-open stdout/stderr fds to 3/4 (both
+    // valid targets — plain integers, not file handles, so nothing else can
+    // invalidate them between the two calls) so the shell handler can
+    // message past systemd-cat (which captures fd 1/2 into the journal). A
+    // failure means the *messaging* path breaks, not the session itself, but
+    // it must still be reported rather than silently exec-ing into a signal
+    // handler that can't talk to the user (P5-05).
     unsafe {
-        libc::dup2(1, 3);
-        libc::dup2(2, 4);
+        if libc::dup2(1, 3) < 0 {
+            return Err(Error::io("dup2(1, 3)", std::io::Error::last_os_error()));
+        }
+        if libc::dup2(2, 4) < 0 {
+            return Err(Error::io("dup2(2, 4)", std::io::Error::last_os_error()));
+        }
     }
     let envelope = format!("wayland-session-envelope@{}.target", comp.id_unit_string);
     let mut cmd = Command::new("systemd-cat");

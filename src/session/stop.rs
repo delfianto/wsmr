@@ -6,6 +6,13 @@ use crate::sysd::dbus::SessionBus;
 use crate::units::generate::{self, Rung};
 use crate::units::plan::{RemovalPlan, plan_remove_all};
 use std::path::Path;
+use std::time::Duration;
+
+/// How long `stop_wm` waits for the compositor's stop job to clear before
+/// giving up (P5-04). Generously above `wayland-wm@.service`'s own
+/// `TimeoutStopSec=10`, since the wait covers the whole cascading session
+/// teardown, not just that one unit.
+const STOP_JOB_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The upstream "generic" active-check unit set: any of these being
 /// active/activating means a session is up or coming up. Ports
@@ -64,7 +71,7 @@ pub fn stop_wm(bus: &SessionBus, dry_run: bool) -> Result<bool> {
         return Ok(true);
     }
     let job = bus.stop_unit(&unit.name, "fail")?;
-    bus.wait_for_job(&job)?;
+    bus.wait_for_job(&job, &unit.name, STOP_JOB_TIMEOUT)?;
     Ok(true)
 }
 

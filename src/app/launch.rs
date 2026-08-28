@@ -655,7 +655,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wsmr-launchm-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("viewer.desktop");
-        std::fs::write(&path, "[Desktop Entry]\nType=Application\nExec=sh %f\n").unwrap();
+        std::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=Viewer\nExec=sh %f\n",
+        )
+        .unwrap();
         // two file args + a single-valued %f → one unit per file
         let argvs = resolve(&opts(vec![
             path.to_str().unwrap(),

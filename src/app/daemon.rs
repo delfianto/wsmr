@@ -16,9 +16,12 @@ use crate::error::{Error, Result};
 use crate::units::templates::shlex_join;
 use crate::util::xdg;
 use clap::Parser;
+use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicPtr, Ordering};
+use std::time::{Duration, Instant};
 
 // Leaked CStrings of the two FIFO paths, set once at startup so the (async-
 // signal-safe) handler can unlink them on a termination signal.
@@ -84,7 +87,7 @@ pub fn run() -> Result<()> {
             .collect();
 
         match args.first().map(String::as_str) {
-            None => send("error 'No args given!' 2")?,
+            None => send_reply("error 'No args given!' 2"),
             Some("stop") => {
                 // Don't write a reply: the out-FIFO write would block waiting for
                 // a reader the stopping client need not provide. Just clean up.
@@ -92,15 +95,15 @@ pub fn run() -> Result<()> {
                 remove_fifos(&in_path, &out_path);
                 return Ok(());
             }
-            Some("ping") => send("pong")?,
+            Some("ping") => send_reply("pong"),
             Some("app") => match handle_app(&args) {
-                Ok(out) => send(&out)?,
-                Err(e) => send(&format!("error {} 1", shquote(&format!("Error: {e}"))))?,
+                Ok(out) => send_reply(&out),
+                Err(e) => send_reply(&format!("error {} 1", shquote(&format!("Error: {e}")))),
             },
-            Some(_) => send(&format!(
+            Some(_) => send_reply(&format!(
                 "error {} 2",
                 shquote(&format!("Invalid arguments: {}", args.join(" ")))
-            ))?,
+            )),
         }
     }
 }
@@ -125,9 +128,66 @@ fn handle_app(args: &[String]) -> Result<String> {
     }
 }
 
+/// Send a reply, logging (not propagating) a failure — a client that gave up
+/// before reading its reply must not take the whole daemon loop down with it
+/// (P5-04). Used by every reply site in [`run`]'s main loop.
+fn send_reply(text: &str) {
+    if let Err(e) = send(text) {
+        eprintln!("wsmr: app daemon: failed to send reply: {e}");
+    }
+}
+
+/// How long [`send`] waits for a reader before giving up (P5-04).
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+const SEND_POLL_INTERVAL: Duration = Duration::from_millis(20);
+
 fn send(text: &str) -> Result<()> {
     let out = create_fifo("wsmr-app-daemon-out")?;
-    std::fs::write(&out, format!("{text}\n")).map_err(|e| Error::io(&out, e))
+    let mut f = open_fifo_for_write_bounded(&out, SEND_TIMEOUT)?;
+    f.write_all(format!("{text}\n").as_bytes())
+        .map_err(|e| Error::io(&out, e))
+}
+
+/// Open a FIFO for writing without blocking forever if no reader ever shows
+/// up: opening a FIFO for writing normally blocks until a reader opens the
+/// other end, so a client that gave up (or crashed) between sending its
+/// request and reading the reply would otherwise wedge the *entire* daemon
+/// loop on a write nobody will ever read. Retries a non-blocking open
+/// (`O_NONBLOCK` open fails immediately with `ENXIO` rather than blocking
+/// when there's no reader yet) until `timeout` elapses, then clears
+/// `O_NONBLOCK` before returning so the actual write behaves normally (safe
+/// once a reader is confirmed present).
+fn open_fifo_for_write_bounded(path: &Path, timeout: Duration) -> Result<std::fs::File> {
+    let start = Instant::now();
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+        {
+            Ok(f) => {
+                // SAFETY: `f`'s fd is valid for the duration of this call;
+                // clearing O_NONBLOCK only affects blocking behavior, not
+                // validity.
+                unsafe {
+                    libc::fcntl(std::os::unix::io::AsRawFd::as_raw_fd(&f), libc::F_SETFL, 0);
+                }
+                return Ok(f);
+            }
+            Err(e) if e.raw_os_error() == Some(libc::ENXIO) => {
+                if start.elapsed() >= timeout {
+                    return Err(Error::io(
+                        path,
+                        std::io::Error::other(
+                            "timed out waiting for a reader on the app-daemon output FIFO",
+                        ),
+                    ));
+                }
+                std::thread::sleep(SEND_POLL_INTERVAL);
+            }
+            Err(e) => return Err(Error::io(path, e)),
+        }
+    }
 }
 
 fn shquote(s: &str) -> String {
@@ -190,7 +250,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wsmr-daemon-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("v.desktop");
-        std::fs::write(&path, "[Desktop Entry]\nType=Application\nExec=sh %f\n").unwrap();
+        std::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=V\nExec=sh %f\n",
+        )
+        .unwrap();
         let out = handle_app(&[
             "app".into(),
             path.to_string_lossy().into_owned(),
@@ -230,5 +294,59 @@ mod tests {
             assert!(is_fifo(&p3));
         });
         let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    fn mkfifo(path: &Path) {
+        let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        // SAFETY: mkfifo on a valid, NUL-terminated C string path.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    }
+
+    /// P5-04: with no reader ever showing up, the bounded open must return
+    /// (an error) within roughly `timeout` — not hang forever like a plain
+    /// blocking `OpenOptions::write(true).open()` on a FIFO would.
+    #[test]
+    fn open_fifo_for_write_bounded_times_out_deterministically() {
+        let dir = std::env::temp_dir().join(format!("wsmr-fifo-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out");
+        mkfifo(&path);
+
+        let start = Instant::now();
+        let err = open_fifo_for_write_bounded(&path, Duration::from_millis(150)).unwrap_err();
+        let elapsed = start.elapsed();
+        assert!(err.to_string().contains("timed out"), "got: {err}");
+        assert!(
+            elapsed >= Duration::from_millis(150),
+            "returned too early: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "took far longer than the timeout: {elapsed:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The success path: a reader that opens shortly after the write attempt
+    /// starts is picked up within the timeout, not treated as "no reader".
+    #[test]
+    fn open_fifo_for_write_bounded_succeeds_once_a_reader_appears() {
+        let dir = std::env::temp_dir().join(format!("wsmr-fifo-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("out");
+        mkfifo(&path);
+
+        let reader_path = path.clone();
+        let reader = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::read_to_string(&reader_path).unwrap()
+        });
+
+        let mut f = open_fifo_for_write_bounded(&path, Duration::from_secs(2)).unwrap();
+        f.write_all(b"hello\n").unwrap();
+        drop(f);
+
+        assert_eq!(reader.join().unwrap(), "hello\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
