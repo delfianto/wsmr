@@ -1641,6 +1641,29 @@ scheduling jitter in exactly when that registry event fires relative to how
 far along Hyprland's own teardown is — not something wsmr's own generation
 or lifecycle logic has any influence over.
 
+**Cross-validated against real `uwsm` — conclusively confirms this is
+unrelated to wsmr.** To settle it directly rather than relying on
+inference, the same disposable account's `~/session.sh` was extended into a
+selectable launcher (`./session.sh uwsm` vs. `./session.sh wsmr`, same
+compositor/config either way) and the same Hyprland session was run end to
+end through real `uwsm 0.26.7` instead. The identical crash happened, down
+to the same signature (`Got interface: ext_foreign_toplevel_image_capture`
+immediately before the SIGSEGV) and the exact same outcome
+(`Result=start-limit-hit`, `NRestarts=6`). Confirms this is purely a
+`Hyprland`/`xdg-desktop-portal-hyprland` interaction, entirely independent
+of which session manager starts and stops the compositor — wsmr and uwsm
+both just ask systemd to stop `wayland-wm@.service`, and the portal
+mishandles what happens next identically either way. One incidental,
+harmless side-observation from running `uwsm` on an account previously used
+by `wsmr`: journal `SyslogIdentifier`s still read `wsmr_...` even during the
+`uwsm`-initiated run, because `uwsm` only ever manages its own drop-ins
+(matching its real, documented design — see `docs/coexistence.md`) and
+never rewrote the base `wayland-wm-env@.service`/`wayland-wm@.service`
+template files wsmr had generated into the same runtime rung directory
+earlier. Cosmetically confusing if you don't know why, but exactly the
+byte-identical-static-graph coexistence Phase 0 was designed around,
+working as intended.
+
 ### P7-04 Exercise live failure recovery
 
 - [ ] Test a compositor configuration error before readiness. Not tested.
