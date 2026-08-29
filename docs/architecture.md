@@ -158,6 +158,41 @@ crate for exactly that reason: it's the one place where getting a boundary
 case wrong (a variable that should have been cleaned up but wasn't, or vice
 versa) silently corrupts every session after the first.
 
+### Compositor-specific environment files
+
+`env_post` doesn't come only from `/etc/profile`/`~/.profile` — the POSIX
+loader (`libexec/prepare-env.sh`, ported from uwsm's own script nearly
+verbatim) also sources a per-compositor environment file convention,
+**before** `env_post` is snapshotted, so anything exported there flows
+through the exact same delta computation as everything else: tracked as
+`set`, recorded for cleanup, and unset again on stop like any other
+session-scoped variable.
+
+For every directory in `$XDG_CONFIG_HOME:$XDG_CONFIG_DIRS:$XDG_DATA_DIRS`
+(processed in *increasing* priority — `XDG_DATA_DIRS` first, `XDG_CONFIG_HOME`
+last, so the most user-specific file wins), the loader sources, in order:
+
+1. `wsmr/env` — always, regardless of compositor.
+2. `wsmr/env-<name>` for each name in `$XDG_CURRENT_DESKTOP` (lowercased,
+   colon-split — for a single desktop name, which is the common case,
+   this is simply `wsmr/env-<name>`; with more than one name, later names
+   in the list are sourced last and take priority over earlier ones) —
+   e.g. `wsmr/env-hyprland` for a session started with `-D Hyprland`.
+3. A `.d/` directory next to each of the above (`wsmr/env.d/*`,
+   `wsmr/env-hyprland.d/*`), each file sourced in turn.
+
+In practice, that means **`~/.config/wsmr/env-hyprland`** (or
+`/etc/xdg/wsmr/env-hyprland` for a system-wide default) is read
+automatically on every session where the compositor identifies as
+Hyprland — no code change needed to add compositor-specific behavior. This
+is the same convention upstream `uwsm` uses (`~/.config/uwsm/env-<id>`),
+carried over deliberately: wsmr's core stays compositor-agnostic, and
+compositor-specific knowledge lives in config, not in `if compositor ==
+"..."` branches in Rust. See
+[`docs/known-issues.md`](known-issues.md#hyprland-leaves-five-environment-variables-behind-on-its-own)
+for a concrete example — working around a real Hyprland bug by exporting
+`HYPRLAND_NO_SD_VARS=1` from exactly such a file, verified live.
+
 **Generations.** Every `start` mints a fresh random generation id
 (`src/session/state.rs::begin_generation`). Every cleanup-list entry is
 tagged with the generation that requested it, so `cleanup-env` only ever

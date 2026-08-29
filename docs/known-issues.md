@@ -309,12 +309,43 @@ Upstream `uwsm` does not currently set `HYPRLAND_NO_SD_VARS` either
 the original bug today; this is a wsmr/user-side mitigation, not something
 that changed upstream.
 
-**Not yet done: wiring this into wsmr itself.** This was tested by hand via
-`systemctl --user set-environment`, not by wsmr automatically exporting it
-for Hyprland. Whether wsmr should set `HYPRLAND_NO_SD_VARS=1` by default
-when the resolved compositor is Hyprland (or expose it as a flag) is an
-open design question, not yet decided or implemented — see
-[`docs/fix-plan.md`](fix-plan.md).
+**Recommended fix: a config file, not a code change.** wsmr's own shell
+loader (`libexec/prepare-env.sh`, ported from uwsm) already auto-sources a
+per-compositor environment file for exactly this kind of case — see
+[`docs/architecture.md`](architecture.md#compositor-specific-environment-files)
+for the mechanism. Dropping this into
+`~/.config/wsmr/env-hyprland` (or `/etc/xdg/wsmr/env-hyprland` for a
+system-wide default) applies the mitigation to every Hyprland session
+started by this account, with no wsmr code changes:
+
+```sh
+# ~/.config/wsmr/env-hyprland
+export HYPRLAND_NO_SD_VARS=1
+```
+
+**Verified live, via this exact file, not just the mechanism it relies
+on.** The `systemctl --user set-environment` test above was re-run through
+the config file instead: same disposable account, a fresh clean baseline,
+the file in place, no manual `set-environment` call at all. The result was
+identical — `HYPRLAND_NO_SD_VARS=1` present in Hyprland's own process
+environment, and all five variables gone after `wsmr stop` — with one
+improvement over the manual test: because the variable now arrives through
+wsmr's own env-delta computation (present in `env_post`, absent from
+`env_pre`) rather than being injected ahead of it, wsmr tracks
+`HYPRLAND_NO_SD_VARS` itself as a session-scoped variable and cleanly
+unsets *it* on stop too — it doesn't linger in the activation environment
+between sessions the way the manual `set-environment` version did.
+
+A wsmr code change (detecting Hyprland and setting this automatically) was
+considered and deliberately not done: wsmr's core is compositor-agnostic
+by design (see [`docs/architecture.md`](architecture.md)), and this
+per-compositor environment file is the existing, intended extension point
+for exactly this kind of compositor-specific knowledge — matching how
+`uwsm` itself expects users to handle compositor quirks
+(`~/.config/uwsm/env-<compositor>`). Packaging could ship
+`/etc/xdg/wsmr/env-hyprland` as a default for Hyprland-specific packages
+(e.g. `arch/PKGBUILD`'s session entry) without touching `src/` at all —
+not currently done, worth considering.
 
 One more thing worth watching rather than acting on yet:
 [hyprwm/Hyprland#15776](https://github.com/hyprwm/Hyprland/pull/15776)
