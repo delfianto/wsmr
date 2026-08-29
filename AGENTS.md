@@ -15,9 +15,8 @@ no `uwsm/` sibling checkout in this repository — when a real uwsm install is
 available (e.g. `/usr/share/uwsm/modules/uwsm/main.py` on an Arch/CachyOS box
 with the `uwsm` package installed), read its actual source directly rather
 than relying on memory; several real bugs in this port were only found that
-way. Otherwise,
-[`docs/uwsm-core-analysis.md`](docs/uwsm-core-analysis.md) is the porting
-reference distilled from that source.
+way. [`docs/architecture.md`](docs/architecture.md) is this port's own
+design reference (unit graph, session lifecycle, env-delta machinery).
 
 **Status:** past scaffolding — a substantial, working, unit-tested port
 (session bootstrap, environment-delta lifecycle, app launching, CLI surface).
@@ -156,7 +155,8 @@ CLI surface to reproduce (from `main.py` argparse):
 ## Crate choices (decided)
 
 - CLI: `clap` (derive), mirroring uwsm's argparse subcommand tree —
-  `src/cli.rs`. See `docs/cli-compatibility.md` for exactly how closely.
+  `src/cli.rs`. See `docs/architecture.md`'s CLI surface section for the
+  subcommand table and known divergences.
 - D-Bus/systemd: `zbus`, used in **blocking** mode (`zbus::blocking`), no
   `tokio` — maps cleanly onto uwsm's synchronous polling. Talks directly to
   systemd's D-Bus API (`src/sysd/dbus.rs`); no `libsystemd`/`sd-notify` FFI.

@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 900" font-family="Inter,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif">
+  <rect x="0" y="0" width="900" height="900" fill="#ffffff"/>
+  <defs>
+    <filter id="ed-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.16"/>
+    </filter>
+    <marker id="ed-indigo" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0,0.5 L8,4.5 L0,8.5 Z" fill="#4f46e5"/>
+    </marker>
+    <marker id="ed-rose" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0,0.5 L8,4.5 L0,8.5 Z" fill="#e11d48"/>
+    </marker>
+  </defs>
+
+  <text x="450" y="22" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">the environment-delta lifecycle (src/env/delta.rs)</text>
+
+  <!-- 1 -->
+  <rect x="60" y="40" width="780" height="46" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ed-shadow)"/>
+  <text x="450" y="68" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#312e81">env_pre — snapshot of the current systemd/D-Bus activation environment</text>
+
+  <line x1="450" y1="86" x2="450" y2="132" stroke="#4f46e5" stroke-width="2" marker-end="url(#ed-indigo)"/>
+  <!-- 2 -->
+  <rect x="60" y="132" width="780" height="60" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ed-shadow)"/>
+  <text x="450" y="157" text-anchor="middle" font-size="12.5" fill="#312e81">POSIX shell loader (prepare-env.sh) runs, starting from env_pre —</text>
+  <text x="450" y="176" text-anchor="middle" font-size="12.5" fill="#312e81">sources profile.d and compositor-specific environment files</text>
+
+  <line x1="450" y1="192" x2="450" y2="230" stroke="#4f46e5" stroke-width="2" marker-end="url(#ed-indigo)"/>
+  <!-- 3 -->
+  <rect x="60" y="230" width="780" height="46" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ed-shadow)"/>
+  <text x="450" y="258" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#312e81">env_post — the loader's resulting environment</text>
+
+  <line x1="450" y1="276" x2="450" y2="326" stroke="#4f46e5" stroke-width="2" marker-end="url(#ed-indigo)"/>
+  <text x="470" y="304" font-size="11" fill="#4f46e5">diff (pure set-algebra)</text>
+
+  <!-- formulas -->
+  <rect x="50" y="326" width="800" height="118" rx="12" fill="#f8fafc" stroke="#64748b" stroke-width="1.5" filter="url(#ed-shadow)"/>
+  <text x="450" y="350" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">compute_changes(env_pre, env_post) — honoring the varnames policy</text>
+  <text x="80" y="374" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11.5" fill="#1e293b">set     = (post − pre) ∪ (always_export ∩ post), minus (never_export ∪ always_unset)</text>
+  <text x="80" y="398" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11.5" fill="#1e293b">unset   = ((pre.keys − post.keys) ∪ always_unset) ∩ pre.keys</text>
+  <text x="80" y="422" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11.5" fill="#1e293b">cleanup = set.keys − never_cleanup</text>
+
+  <line x1="450" y1="444" x2="450" y2="480" stroke="#4f46e5" stroke-width="2" marker-end="url(#ed-indigo)"/>
+  <!-- apply -->
+  <rect x="50" y="480" width="800" height="58" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ed-shadow)"/>
+  <text x="450" y="504" text-anchor="middle" font-size="12.5" fill="#312e81">apply set/unset to systemd --user and the D-Bus activation environment</text>
+  <text x="450" y="523" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="10.5" fill="#4338ca">set/unset-environment, dbus-update-activation-environment</text>
+
+  <line x1="450" y1="538" x2="450" y2="576" stroke="#4f46e5" stroke-width="2" marker-end="url(#ed-indigo)"/>
+  <!-- record -->
+  <rect x="50" y="576" width="800" height="52" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ed-shadow)"/>
+  <text x="450" y="597" text-anchor="middle" font-size="12.5" fill="#312e81">record the cleanup obligation for this generation</text>
+  <text x="450" y="616" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="10.5" fill="#4338ca">$XDG_RUNTIME_DIR/wsmr/env_cleanup.list (flock-serialized, generation-scoped)</text>
+
+  <line x1="30" y1="654" x2="870" y2="654" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="2 4"/>
+  <text x="450" y="672" text-anchor="middle" font-size="11.5" font-style="italic" fill="#64748b">... the compositor session runs ...</text>
+  <text x="450" y="694" text-anchor="middle" font-size="12" font-weight="700" fill="#e11d48">on stop</text>
+
+  <line x1="450" y1="702" x2="450" y2="726" stroke="#e11d48" stroke-width="2" marker-end="url(#ed-rose)"/>
+  <!-- cleanup-env -->
+  <rect x="50" y="726" width="800" height="58" rx="12" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.75" filter="url(#ed-shadow)"/>
+  <text x="450" y="750" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#881337">cleanup-env (ExecStopPost of wayland-wm-env@)</text>
+  <text x="450" y="769" text-anchor="middle" font-size="11.5" fill="#9f1239">reads env_cleanup.list for the current generation only</text>
+
+  <line x1="450" y1="784" x2="450" y2="812" stroke="#e11d48" stroke-width="2" marker-end="url(#ed-rose)"/>
+  <!-- restored -->
+  <rect x="50" y="812" width="800" height="58" rx="12" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.75" filter="url(#ed-shadow)"/>
+  <text x="450" y="836" text-anchor="middle" font-size="12.5" fill="#881337">reverses exactly what was set/unset —</text>
+  <text x="450" y="855" text-anchor="middle" font-size="12.5" fill="#881337">activation environment restored to env_pre</text>
+</svg>

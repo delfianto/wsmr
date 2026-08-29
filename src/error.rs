@@ -1,7 +1,7 @@
 //! Error types for wsmr.
 //!
 //! Library code returns [`Error`]; `main` adapts it to `anyhow` at the process
-//! edge. See `docs/uwsm-core-analysis.md` §8.
+//! edge. See `docs/architecture.md`.
 
 use std::path::PathBuf;
 

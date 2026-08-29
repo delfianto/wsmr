@@ -2,7 +2,7 @@
 //!
 //! Ports `MainArg` (`main.py:188`) and the **bare-executable** branch of
 //! `fill_comp_globals` (`main.py:3965`/`:4292`). Desktop-entry compositor
-//! resolution is deferred to M3. See `docs/uwsm-core-analysis.md` §3.2/§6.
+//! resolution is deferred to M3. See `docs/architecture.md`.
 
 use crate::app::entry::DesktopEntry;
 use crate::app::find;

@@ -43,81 +43,28 @@ In:
 
 Out (by design):
 
-- **Compositor selection.** Your display manager (SDDM here) picks the session;
-  wsmr just does the systemd plumbing for the command it's handed.
+- **Compositor selection.** Your display manager picks the session; wsmr just
+  does the systemd plumbing for the command it's handed.
 - Shell plugins/quirks, `fumon`, `ttyautolock`, and the rest of uwsm's surface.
   Not ported. (Tweak drop-ins *are* ported — `start -t`/`-T`.)
 
-## How it works (the part you actually care about)
+## How it works (the short version)
 
-### The unit graph
+`start` renders a full graph of systemd **user** units per compositor
+instance (diff-on-write, byte-identical statics to upstream), snapshots and
+computes the environment delta the compositor needs, execs into a shell
+signal-handler that anchors the session, and lets systemd's own
+`BindsTo`/`PropagatesStopTo`/`Conflicts` wiring tear the whole thing down as
+one unit when the compositor exits.
 
-`start` renders the full graph of systemd **user** units (with the running
-binary's path baked in) into the unit rung — `$XDG_RUNTIME_DIR/systemd/user` by
-default, `$XDG_CONFIG_HOME/systemd/user` with `-U home` — diff-on-write, so a
-re-run is a no-op when nothing changed. Unlike uwsm (which ships most units
-statically via its build and only generates the drop-ins), wsmr generates the
-**whole** graph at runtime; that keeps it a self-contained binary and means the
-units can never drift from the binary that wrote them.
+![wsmr unit graph](docs/diagrams/unit-graph.svg)
 
-```
-graphical-session.target            (the goal; standard systemd target)
-└─ wayland-session@<wm>.target
-   ├─ wayland-session-pre@.target            pre-session ordering anchor
-   ├─ wayland-wm-env@<wm>.service            ExecStart=wsmr aux prepare-env  (the env loader)
-   ├─ wayland-wm@<wm>.service                ExecStart=wsmr aux exec -- <wm> (the compositor)
-   ├─ wayland-session-waitenv.service        blocks until the env is ready
-   ├─ wayland-session-xdg-autostart@.target  pulls in xdg-desktop-autostart
-   └─ wayland-session-shutdown.target        OnSuccess/teardown fan-out
-wayland-session-bindpid@<pid>.service        binds the session to the launching PID
-wayland-session-envelope@<wm>.target         what the anchor process exec's onto
-wayland-wm-app-daemon.service                optional `app` fast-path daemon
-{app,background,session}-graphical.slice      where launched apps live
-```
+![wsmr session lifecycle](docs/diagrams/session-lifecycle.svg)
 
-`BindsTo`/`PropagatesStopTo`/`Conflicts`/`OnSuccess` wiring makes the whole thing
-stop as a unit when the compositor exits.
-
-### Session lifecycle
-
-```
-wsmr start <wm>
-  ├─ refuse if a compositor is already active (checked before touching anything)
-  ├─ generate units + per-compositor 50_custom.conf drop-ins, daemon-reload
-  ├─ start wayland-session-bindpid@<pid>  (session lifetime ↔ this process)
-  ├─ snapshot the login environment to $XDG_RUNTIME_DIR/wsmr/
-  └─ exec → systemd-cat → signal-handler.sh → the envelope target   (process is replaced)
-
-# meanwhile, started by the units:
-wsmr aux prepare-env   deduce seat/VT/session via logind, run the POSIX env
-                       loader, diff pre/post env, push the delta to systemd --user
-                       + D-Bus activation env
-wsmr aux exec          spawn the readiness watcher, then exec the compositor in
-                       the unit's cgroup
-wsmr aux readiness     wait for WAYLAND_DISPLAY (+ UWSM_WAIT_VARNAMES) to appear,
-                       sync the env delta, then systemd-notify READY=1
-→ graphical-session.target is reached
-
-wsmr stop
-  └─ stop wayland-wm@<wm> → cascade tears down the session → cleanup-env restores
-     the activation environment from the recorded delta
-```
-
-The readiness watcher is **spawned, not forked** — `zbus`'s async-io reactor
-thread does not survive `fork()`, so a forked watcher's D-Bus connection is dead
-and never signals readiness. (This was found the hard way, via the integration
-test. It's the kind of bug that only shows up on real systemd.)
-
-### The environment delta
-
-The hard part of a Wayland session is the environment. wsmr snapshots the
-activation environment *before* running the shell loader (`prepare-env.sh`,
-sourcing your profile etc.), snapshots it *after*, and computes a typed set
-delta — honoring uwsm's variable classes (`session_specific`, `always_export`,
-`never_export`, `always_unset`, `always_cleanup`, `never_cleanup`) — then
-`set`/`unset`s exactly that delta on `systemd --user` and the D-Bus activation
-environment. `cleanup-env` on shutdown reverses precisely what was set. This is
-all pure set-algebra and is the most thoroughly unit-tested part of the crate.
+The full walkthrough — module layout, the env-delta set-algebra, generation-
+scoped locking, and exactly why the readiness watcher is spawned rather than
+forked — is in [`docs/architecture.md`](docs/architecture.md). Start there to
+understand the code.
 
 ### Launching apps
 
@@ -233,27 +180,31 @@ just coverage        # merged unit + integration coverage; >= 90% lines is the
                       # authoritative *local* gate — not enforced by CI
 ```
 
-See [`CLAUDE.md`](CLAUDE.md) for the container/coverage internals,
-[`docs/uwsm-core-analysis.md`](docs/uwsm-core-analysis.md) for the porting spec
-(unit graph, env-delta lifecycle, module layout),
-[`docs/cli-compatibility.md`](docs/cli-compatibility.md) for the exact
-upstream-compatibility target and known CLI divergences,
-[`docs/coexistence.md`](docs/coexistence.md) for how wsmr avoids stepping on
-a coexisting uwsm installation, and [`docs/fix-plan.md`](docs/fix-plan.md) for
-the live tracker of what's verified vs. still open.
+See [`CLAUDE.md`](CLAUDE.md) for the container/coverage internals, and
+[`docs/README.md`](docs/README.md) for the full documentation index —
+architecture, known real-world issues, CLI compatibility, coexistence with
+uwsm, the upstream porting reference, and the live fix-plan tracker.
 
 ## Status & disclaimer
 
 This is an experiment. It reaches into your login session, your `systemd --user`
 manager, and your D-Bus activation environment *on purpose*. The lifecycle is
 verified against a stub compositor on real systemd, run locally in a
-container (`just integration`) — **not currently run in CI**. It has also
-had a first, partial real-hardware pass (real Hyprland, real monitors, a
-real disposable user) with a real environment-restoration gap found and not
-yet fixed (see `docs/fix-plan.md`'s Phase 7 for exactly what's covered and
-what isn't). Unit tests (`cargo test`) and lint/format *do*
-run in CI on every push/PR. None of this adds up to a hardened,
-daily-driven session manager yet.
+container (`just integration`) — **not currently run in CI**. Unit tests
+(`cargo test`) and lint/format *do* run in CI on every push/PR. None of this
+adds up to a hardened, daily-driven session manager yet.
+
+It has also had a first, partial real-hardware pass — real Hyprland, real
+monitors, a real disposable user — which found three real, non-wsmr bugs
+(a kmscon/compositor seat-ownership conflict, an `xdg-desktop-portal-hyprland`
+crash on teardown, and a Hyprland environment-restoration gap) and
+cross-validated all three against real upstream uwsm to confirm they aren't
+wsmr-specific. **That pass only ever used Hyprland.** No other compositor
+(niri, sway, river, labwc, ...) has been run through wsmr at all — treat
+those as completely untested. See
+[`docs/known-issues.md`](docs/known-issues.md) for the full detail and
+[`docs/fix-plan.md`](docs/fix-plan.md)'s Phase 7 for exactly what is and
+isn't covered.
 
 If you run it on your actual machine and your session faceplants, your autostart
 turns to confetti, you get dumped back to a TTY, or your toaster gains sentience

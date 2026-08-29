@@ -2,8 +2,8 @@
 //!
 //! Generation and removal must never treat a path as wsmr's own just because
 //! its name matches a pattern wsmr recognizes — a foreign unit (hand-written,
-//! or written by uwsm, which currently shares this unit namespace, see
-//! `docs/coexistence.md`) could occupy the exact same path. The manifest
+//! or written by uwsm, which currently shares this unit namespace) could
+//! occupy the exact same path. The manifest
 //! records, for every relative path wsmr has written, a content fingerprint
 //! of what wsmr put there; a path counts as wsmr-owned only when both the
 //! manifest lists it *and* the file on disk still carries that exact

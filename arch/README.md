@@ -41,7 +41,7 @@ makepkg -si
 Builds via `cargo build --frozen --release` against the checked-in
 `Cargo.lock`, runs `cargo test` in `check()` (skip with `makepkg --nocheck`
 for a faster iterative build), and installs `/usr/bin/wsmr` plus docs
-(`docs/fix-plan.md`, `docs/cli-compatibility.md`, `docs/coexistence.md`)
+(`docs/fix-plan.md`, `docs/architecture.md`, `docs/known-issues.md`)
 under `/usr/share/doc/wsmr/`, plus a Hyprland wayland-sessions entry
 (`/usr/share/wayland-sessions/hyprland-wsmr.desktop`, from
 `arch/session/hyprland-wsmr.desktop`) so the package is actually usable to

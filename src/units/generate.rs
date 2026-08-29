@@ -3,7 +3,7 @@
 //! Ports `update_unit`/`remove_unit`/`get_unit_path`
 //! (`main.py:1275`/`:1340`/`:1117`), extended with ownership tracking so
 //! generation and cleanup can never mutate a file wsmr doesn't verifiably
-//! own (see `docs/coexistence.md`). `reload` lives in [`crate::sysd`] (M1+).
+//! own (see `docs/architecture.md`). `reload` lives in [`crate::sysd`] (M1+).
 //! See `REFERENCE.md` §8.2.
 
 use super::plan::{Conflict, GenerationPlan, RemovalPlan};

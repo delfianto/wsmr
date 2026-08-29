@@ -1,0 +1,255 @@
+# Known issues & environment quirks
+
+Everything in this document was found running a **real** wsmr-managed
+Hyprland session on real hardware — not inferred from source reading. Each
+finding was then **cross-validated against real upstream `uwsm` 0.26.7** on
+the exact same machine/account/compositor, specifically to answer "is this a
+wsmr bug, or something wsmr just happens to expose?" Where that's noted
+below, it's because it was actually run, not assumed.
+
+Raw evidence (journal excerpts, exact commands, timestamps) lives in
+[`docs/fix-plan.md`](fix-plan.md)'s Phase 7 section; this document is the
+distilled, standalone version meant to be read on its own.
+
+## Compositor support: here be dragons
+
+**wsmr has only ever been run against Hyprland.** The unit graph and
+environment-delta logic in [`docs/architecture.md`](architecture.md) are
+compositor-agnostic by design — the same design upstream uwsm uses across
+sway, niri, river, labwc, and everything else it supports — but that's a
+design claim, not a tested one, for anything other than Hyprland here.
+
+| Compositor | Status |
+|---|---|
+| **Hyprland** | The only one actually run. Version `0.56.2-1` on this host. Real session, real monitors, verified against most of the Phase 7 checklist — see [`docs/fix-plan.md`](fix-plan.md). |
+| niri, sway, river, labwc, anything else | **Untested. Here be dragons.** No reason to expect the core session/env machinery to behave differently — it doesn't touch compositor internals — but the findings on this page (especially the kmscon conflict, which is a VT/seat-ownership issue between *any* compositor and kmscon) have only been confirmed for Hyprland's specific DRM/seat handling and its specific `exec-once=`/environment-export behavior. Don't assume any of the specifics below transfer; do assume the *category* of problem (seat ownership on manual VT switches, environment re-export races, portal robustness during teardown) is worth checking for on any compositor. |
+
+If you run wsmr against something other than Hyprland and it works (or
+doesn't), that's genuinely new information — see
+[`docs/fix-plan.md`](fix-plan.md) for where to record it.
+
+## kmscon fights the compositor for seat/DRM ownership
+
+**Real, reproducible. Confirmed present under both wsmr and real uwsm — not
+a wsmr defect.**
+
+On systems where `systemd-logind`'s `autovt@.service` is aliased to
+`kmsconvt@.service` (check with `systemctl cat autovt@.service`) — which is
+the default on this CachyOS host — switching to *any* unused VT spawns
+`kmscon` (a KMS-based styled text console) instead of a bare `getty`. wsmr's
+own hand-off code (`libexec/signal-handler.sh`, ported verbatim from
+upstream) correctly detects `TERM_SESSION_TYPE=kms` in that case and sends
+kmscon the proper `\033]setBackground\a` escape-sequence hand-off via the
+fd-3/fd-4 messaging path `src/session/start.rs` sets up before re-exec'ing —
+this was inspected and is structurally correct.
+
+Despite that, starting a session from a login shell hosted inside
+`kmscon --vt=tty2 --no-switchvt` produced a session with **completely
+non-functional mouse and keyboard input**. Pulling the real
+`hyprland.log` (Hyprland disables stdout logging right after startup, so
+this requires reading the file directly) showed a repeating cycle for the
+entire life of the session:
+
+![kmscon vs Hyprland seat/DRM ownership flapping loop](diagrams/kmscon-conflict.svg)
+
+Initial device enumeration was correct (real mouse/keyboard detected and
+named properly), which rules out a plain permissions/ACL problem — this is
+a live ownership conflict between two processes that both think they should
+own the seat, not silent denial.
+
+**Workaround (verified working):** explicitly run
+`systemctl start getty@ttyN.service` on an unused VT *before* switching to
+it. That makes `logind` see a console already present on that VT, so it
+never spawns `kmsconvt@ttyN` there — `TERM_SESSION_TYPE` is then never
+`kms`, wsmr's kmscon hand-off code never has to run, and the flapping never
+starts at all (`grep -c "Enabling seat"` on such a session's log: `0`, vs.
+dozens on the first attempt).
+
+**Cross-validated against real uwsm 0.26.7 — confirmed, not just
+predicted.** Structurally first: uwsm's actual Python
+(`main.py:4863-4884`) uses the identical `os.dup2(1, 3)`/`os.dup2(2, 4)` +
+`systemd-cat`-wrapped `signal-handler.sh` invocation wsmr's Rust port uses,
+and `diff /usr/lib/uwsm/signal-handler.sh libexec/signal-handler.sh` is
+empty except for an added attribution comment. Then live: running the same
+account/compositor/config through real uwsm on a kmscon-hosted VT crashed
+Hyprland outright at startup —
+`terminate called after throwing an instance of 'std::runtime_error'`,
+`what(): CBackend::create() failed!`, a genuine SIGABRT with a
+`systemd-coredump` core dump. `CBackend::create()` is Hyprland's DRM/KMS
+backend initializer, consistent with kmscon still holding those resources
+when Hyprland tried to grab them — the same underlying conflict as the wsmr
+run, just a *harder* failure (an outright crash instead of a
+degraded-but-running session), which is itself consistent with this being a
+genuine timing race rather than a deterministic bug. **This settles it: uwsm
+has the identical kmscon problem wsmr does.** Root cause is on kmscon's
+side, or in the kmscon↔Hyprland/aquamarine hand-off specifically — not in
+either session manager's own signal-handling code.
+
+### Why doesn't a real display-manager login hit this?
+
+This host's actual greeter is `greetd` running `noctalia-greeter-session`
+(not SDDM, which doesn't even exist on this system — an earlier assumption
+in this repo's own tracker was wrong about that; see `docs/fix-plan.md`).
+The likely reason a normal greeter-mediated login never sees the kmscon
+conflict: `greetd` owns VT1 directly via its own service configuration
+(`vt: Specific(1)`), rather than switching to an unused VT and letting
+`logind` decide what to spawn there on demand. The generic
+`autovt@`→`kmsconvt@` aliasing only fires for a VT that's being switched to
+and doesn't already have a claimed console — which never happens to VT1
+under `greetd`'s own config. **This is a reasoned inference from confirmed
+facts, not something independently live-tested yet** — worth doing before
+treating it as settled.
+
+## `xdg-desktop-portal-hyprland` SIGSEGV on compositor teardown
+
+**Root-caused precisely. Confirmed present under both wsmr and real uwsm —
+not a wsmr defect.**
+
+Versions on this host at the time of testing: Hyprland `0.56.2-1`,
+`xdg-desktop-portal-hyprland` **`1.4.1-1.1`**, systemd `261.2-1`, dbus
+`1.16.2-1.1`, kernel `7.2.2-1-cachyos`.
+
+Found by [`scripts/e2e-harness.sh`](../scripts/e2e-harness.sh)'s
+`post-logout` stage on its first real run — catching exactly what it was
+built to catch. After a normal, clean in-session logout,
+`systemctl --user list-units --failed` showed 4 units in a genuine `failed`
+state, none of them wsmr's own generated units.
+
+`journalctl -o short-monotonic` pins the portal's failure down to the
+microsecond: at `[63691.302669]` the portal is still processing a new
+Wayland registry interface (`ext_foreign_toplevel_image_capture`) —
+arriving because Hyprland is mid-teardown of its own globals — and **130
+microseconds later**, at `[63691.302801]`,
+`Main process exited, code=dumped, status=11/SEGV`. This is a genuine
+SIGSEGV in the portal's own Wayland event-handling code, triggered by a
+registry event landing during compositor shutdown — **not** a race with
+`PartOf=graphical-session.target`'s stop-propagation, which was the first
+suspicion. The rest of the timeline confirms it: `Restart=on-failure` (the
+only one of the four failed units with this directive) then spawned 5 more
+attempts in the next ~1.2s, every one immediately hitting
+`[CRITICAL] Couldn't connect to a wayland compositor` and exiting 1 (the
+Wayland socket was fully gone by then), until `StartLimitBurst` capped it
+(`Result=start-limit-hit`, `NRestarts=6`) — and Hyprland's own
+"exit cleanly" log line lands *after* all of that, ~200ms later. This isn't
+a scheduling race to design around; it's a real crash bug in how this
+specific portal version handles one specific Wayland event arriving during
+compositor teardown.
+
+The other three failed units are milder, consistent instances of the same
+underlying theme ("doesn't like the compositor disappearing"), not
+independently root-caused to the same depth:
+
+- `xdg-desktop-portal-gtk.service` — failed once, no `Restart=` directive at
+  all, so it can't loop the way the Hyprland portal did.
+- `app-blueman@autostart.service` and `app-cachyos-hello@autostart.service`
+  — both `Restart=no`, both exited `Result=exit-code` /
+  `ExecMainStatus=1` when `app-graphical.slice`'s `PartOf=` propagation tore
+  them down with the session — a simpler mechanism (neither distinguishes
+  "asked to shut down" from "something went wrong"), not a crash.
+
+**Intermittent**, consistent with the root cause: two earlier clean
+start/stop cycles on the same account/compositor didn't hit this at all.
+Since the trigger is a specific Wayland event landing at a specific instant
+relative to how far along Hyprland's own teardown is, that's exactly the
+kind of thing ordinary scheduling jitter would make intermittent.
+
+**Cross-validated against real uwsm 0.26.7 — conclusively confirms this is
+unrelated to wsmr.** The disposable test account's `~/session.sh` was built
+as a selectable `wsmr`/`uwsm` launcher specifically to settle this directly
+rather than by inference (`./session.sh uwsm` vs. `./session.sh wsmr`, same
+compositor/config either way). Running the identical session through real
+`uwsm 0.26.7` hit the identical crash, down to the same signature
+(`Got interface: ext_foreign_toplevel_image_capture` immediately before the
+SIGSEGV) and the exact same outcome (`Result=start-limit-hit`,
+`NRestarts=6`). wsmr and uwsm both just ask systemd to stop
+`wayland-wm@.service`; this portal version mishandles what happens next
+identically either way, regardless of which tool asked.
+
+## Hyprland leaves five environment variables behind on its own
+
+**Root-caused for two of the five. Confirmed present under both wsmr and
+real uwsm, and independent of how the session ends — a real bug in the
+Hyprland binary itself, not a wsmr defect.**
+
+After a clean `wsmr stop`, most session-scoped variables were correctly
+restored (`systemctl --user show-environment` diffed pre/post: all `LC_*`
+vars, `DISPLAY`, `HL_INITIAL_WORKSPACE_TOKEN`, `HYPRLAND_CMD`,
+`HYPRLAND_INSTANCE_SIGNATURE`, `MANAGERPIDFDID`, `OLDPWD`, `SHLVL`,
+`XDG_SEAT`, `XDG_SESSION_ID`, `XDG_VTNR`, `_JAVA_AWT_WM_NONREPARENTING`).
+**Not restored:** `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP`,
+`XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and `XDG_MENU_PREFIX`.
+
+`strings -n 20 /usr/bin/Hyprland` shows the root cause directly: Hyprland
+embeds its own complete shell-command strings for exporting and un-exporting
+its activation environment, entirely independent of whichever session
+manager is running it:
+
+```sh
+# startup:
+systemctl --user import-environment DISPLAY WAYLAND_DISPLAY \
+    HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME \
+    PATH XDG_DATA_DIRS \
+  && hash dbus-update-activation-environment 2>/dev/null \
+  && dbus-update-activation-environment --systemd WAYLAND_DISPLAY \
+       XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME \
+       PATH XDG_DATA_DIRS
+
+# shutdown:
+systemctl --user unset-environment DISPLAY WAYLAND_DISPLAY \
+    HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME \
+    PATH XDG_DATA_DIRS \
+  && hash dbus-update-activation-environment 2>/dev/null \
+  && dbus-update-activation-environment --systemd WAYLAND_DISPLAY \
+       XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME \
+       PATH XDG_DATA_DIRS
+```
+
+This explains why these were set at all (not via wsmr's own
+`finalize`/cleanup path, which never touches `XDG_DATA_DIRS` or
+`QT_QPA_PLATFORMTHEME` and has no record of this export to clean up
+in the first place). The shutdown string *looks* like a matching unexport,
+but it isn't: `dbus-update-activation-environment --systemd NAME`, given a
+**bare name** with no `=VALUE`, re-exports that variable's *current value
+from its own inherited process environment* — and since this command runs
+as Hyprland's own child, it still has `WAYLAND_DISPLAY` etc. set in its own
+process memory even after the `unset-environment` call one clause earlier
+told systemd to forget them. So Hyprland's own shutdown sequence unsets the
+variables, then immediately re-exports the exact same values right back, in
+the same breath. **This is a bug in the command itself, not a
+timing/signal-handling issue** — confirmed by triggering it two different
+ways (a `wsmr stop`-initiated `SIGTERM`, and a clean, user-initiated logout
+from inside the session via Noctalia's own shell UI) and getting the
+identical five leftover variables both times, which rules out the original
+theory that this was a SIGTERM-vs-graceful-exit artifact.
+
+`XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and `XDG_MENU_PREFIX` are not
+explained by this specific mechanism (none appear in either embedded
+command), though `XDG_MENU_PREFIX=hyprland-` still looks Hyprland-authored
+via some other path not yet found. It's also possible one or more of these
+three predates `wsmr start` entirely (e.g. set by PAM for a `tty`-class
+login) — no true pre-`start` baseline was captured on this particular real-
+hardware run to rule that in or out, unlike the Tier-B integration smoke
+test, which does capture one and shows full, clean restoration for the
+stub-compositor case it actually exercises.
+
+**This is squarely Hyprland's own bug, present in the binary regardless of
+session manager** — upstream `uwsm` wraps the exact same binary and would
+hit the exact same re-export bug. wsmr correctly cleaned up 100% of what it
+itself exported through `finalize`.
+
+## Version/environment summary
+
+For reproducing any of the above:
+
+| Component | Version |
+|---|---|
+| Test date | 2026-08-29 |
+| Distro | CachyOS (Arch-based) |
+| Kernel | `7.2.2-1-cachyos` |
+| systemd | `261.2-1` |
+| dbus | `1.16.2-1.1` |
+| Hyprland | `0.56.2-1` |
+| xdg-desktop-portal-hyprland | `1.4.1-1.1` |
+| wsmr | `0.1.0-1` |
+| uwsm (cross-validation) | `0.26.7` |
+| Display manager | `greetd` + `noctalia-greeter-session` |
