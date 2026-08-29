@@ -54,8 +54,18 @@ verification command or evidence in the phase's evidence section.
   start/generation, finalize partial failure, cleanup after an unclean
   compositor exit) — each needs its own broken-fixture variant and container
   boot, cut for wall-clock budget reasons, not attempted-and-failed.
-- [ ] **G3 — Real machine:** Phase 7 passes under a disposable CachyOS user
-  before claiming CachyOS/Wayland/Hyprland runtime support.
+- [~] **G3 — Real machine:** Phase 7 passes under a disposable CachyOS user
+  before claiming CachyOS/Wayland/Hyprland runtime support. **Substantial
+  partial evidence as of 2026-08-29** (see Phase 7 evidence): a real
+  wsmr-managed Hyprland session was reached and verified against most of
+  P7-03's checklist under the disposable `wsmr` account — real compositor
+  cgroup/unit match, live `hyprctl monitors` output against real monitors,
+  a successful `wsmr app` launch. Not closed: no display-manager-mediated
+  login was tested (this system's greeter turned out to be `greetd` +
+  `noctalia-greeter`, not SDDM as originally assumed), the P7-02 harness
+  script still doesn't exist, and a real environment-restoration gap was
+  found that Tier B's stub-compositor test never exercised (see Phase 7
+  evidence for both).
 
 ## Current baseline
 
@@ -1307,84 +1317,257 @@ Phase 6 evidence:
 **Prerequisites:** G0 and G1 are complete. Do not use the primary user's active
 uwsm-managed desktop for the first run.
 
+**Scaffolding:** [`arch/`](arch/README.md) has the PKGBUILD, the disposable-user
+setup script (`arch/e2e-install.sh`), and the session config (wayland-sessions
+entries + Hyprland config notes) P7-01 needs. As of 2026-08-29 it has been run
+for real against a disposable `wsmr` account on the actual target machine —
+see the evidence below for exactly what passed, what didn't, and two new,
+previously-unknown findings it surfaced. P7-02's harness script still doesn't
+exist; today's verification was done by hand, interactively, not via a
+repeatable script.
+
 ### P7-01 Prepare an isolated test identity
 
-- [ ] Create a disposable local test user with its own home and user manager.
-- [ ] Build a release binary and install it at a stable, versioned test path,
-  such as `/usr/local/libexec/wsmr-e2e/<version>/wsmr`.
-- [ ] Create a minimal Hyprland configuration that does not invoke existing
-  `/usr/bin/uwsm` wrappers or inherit the primary user's configuration.
-- [ ] Install a separate display-manager session entry named clearly, for
-  example `Hyprland (wsmr E2E)`.
-- [ ] Record package, kernel, systemd, dbus-broker, Hyprland, and wsmr versions.
-
-Suggested session entry shape; finalize exact arguments after Phase 2:
-
-```ini
-[Desktop Entry]
-Name=Hyprland (wsmr E2E)
-Exec=/usr/local/libexec/wsmr-e2e/<version>/wsmr start -e -D Hyprland hyprland.desktop
-Type=Application
-```
+- [x] Create a disposable local test user with its own home and user manager.
+  `useradd -m -s /bin/bash wsmr` + `loginctl enable-linger wsmr`
+  (`arch/README.md` step 1). Confirmed: `id wsmr` → uid=1002, gid=1004,
+  home=`/home/wsmr`; `loginctl show-user wsmr -p Linger` → `Linger=yes`.
+- [x] Build a release binary and install it at a stable test path — **done via
+  a different path than suggested, deliberately**: `arch/PKGBUILD`
+  (`makepkg -si`) was already built and installed as a normal
+  `/usr/bin/wsmr` package before this session, so that was used directly
+  instead of `arch/e2e-install.sh`'s versioned `/usr/local/libexec/wsmr-e2e/`
+  path. Isolation for this criterion comes from the separate `wsmr` Linux
+  account, not from which binary path it runs, so this is an equally valid
+  substitution (`arch/README.md`'s step 2 now documents both options
+  explicitly). Verified live that `/usr/bin/wsmr` (`pacman -Qi wsmr` →
+  `0.1.0-1`, built today) is actually what ran: the live unit's
+  `ExecStart` showed `path=/usr/bin/wsmr`. A real, unrelated stale binary
+  at `/usr/local/bin/wsmr` (933KB, dated Jul 20 — a `just install` leftover
+  from well before this session's remediation work, shadowing `/usr/bin/wsmr`
+  on `$PATH` since `/usr/local/bin` sorts first) was found and removed
+  mid-session; the very first real attempt had silently run that stale
+  build instead.
+- [x] Create a minimal Hyprland configuration that does not invoke existing
+  `/usr/bin/uwsm` wrappers or inherit the primary user's configuration —
+  **attempted, then found unnecessary and reverted**: a from-scratch minimal
+  `hyprland.conf` was installed first, but this CachyOS/Noctalia-bundled
+  system doesn't use a plain `hyprland.conf` at all. `/etc/skel` (and thus
+  the fresh `wsmr` account) ships a modular **Lua** config
+  (`hyprland.lua` + `config/*.lua`), using Hyprland 0.56.2's native Lua
+  config support (confirmed via a literal string in the `Hyprland` binary
+  itself: `"Use the default lua config from
+  https://github.com/hyprwm/Hyprland/.../hyprland.lua"`). Hyprland's own
+  startup log confirmed `[cfg] Using lua config found at
+  /home/wsmr/.config/hypr/hyprland.lua` — it was already preferring the Lua
+  config over the stub `.conf` even before the stub was deleted; the
+  original theory that the stub was shadowing it was wrong. The stub was
+  removed; the account now runs the unmodified `/etc/skel`-provided Lua
+  config, which already satisfies the actual requirement (isolated from the
+  primary user's personal config, doesn't invoke `/usr/bin/uwsm` to start)
+  with no hand-rolled file needed.
+- [x] Install a separate display-manager session entry named clearly.
+  `arch/PKGBUILD` installs `Hyprland (wsmr-managed)`
+  (`/usr/share/wayland-sessions/hyprland-wsmr.desktop`). **Not yet exercised
+  as an actual login path** — see the acceptance-criteria note below; every
+  session today was started by running `wsmr start -e -D Hyprland
+  hyprland.desktop` directly from an already-logged-in shell, not by
+  picking this entry at a greeter.
+- [x] Record package, kernel, systemd, dbus-broker, Hyprland, and wsmr
+  versions. `systemd 261.2-1`, `dbus 1.16.2-1.1`, `hyprland 0.56.2-1`,
+  `wsmr 0.1.0-1` (`pacman -Q`), kernel `7.2.2-1-cachyos` (`uname -r`).
 
 ### P7-02 Build the three-stage live harness
 
-- [ ] `prepare`: install fixtures, snapshot the pre-login environment, validate
-  ownership conflicts, and install the explicit session entry.
-- [ ] `verify`: execute from inside the real Hyprland session and collect
-  assertions and journals.
-- [ ] `post-logout`: execute over TTY/SSH after logout and verify restoration.
-- [ ] Make every stage rerunnable and scoped to the disposable account.
+- [ ] Not implemented. Every check below was run by hand, interactively,
+  against a live session — not via a repeatable `prepare`/`verify`/
+  `post-logout` script. Real, but not rerunnable evidence.
 
 ### P7-03 Verify real-session behavior
 
-- [ ] `WAYLAND_DISPLAY` names an actual socket under `XDG_RUNTIME_DIR`.
-- [ ] `hyprctl monitors` succeeds and reports the expected backend/output.
-- [ ] Hyprland's PID and cgroup belong to the expected compositor unit.
-- [ ] `FragmentPath`, `DropInPaths`, `ExecStart`, `NotifyAccess`, and unit result
-  match the generated wsmr graph.
-- [ ] Graphical-session and XDG-autostart targets activate.
-- [ ] Required compositor variables reach the systemd manager environment.
-- [ ] A custom D-Bus-activatable fixture observes the same exported variables.
-- [ ] `wsmr app` starts a fixture in the expected unit and slice.
-- [ ] An autostart desktop entry executes and records a marker.
-- [ ] Normal logout stops the graph and restores the baseline environment.
-- [ ] No failed units, stale state, temporary files, or owned unit files remain.
-- [ ] Collect the user journal and test artifacts for review.
+- [x] `WAYLAND_DISPLAY` names an actual socket under `XDG_RUNTIME_DIR`.
+  `sudo test -S /run/user/1002/wayland-1` succeeded.
+- [x] `hyprctl monitors` succeeds and reports the expected backend/output.
+  Returned full, real EDID data for 3 physical monitors: `HDMI-A-2`
+  ("Technical Concepts Ltd Beyond TV", 3840x2160@60, focused), `DP-5`
+  ("ViewSonic Corporation VX3276-QHD", 2560x1440@59.95), `DP-6` ("Lenovo
+  Group Limited G34w-30", 3440x1440@59.97) — the latter two are the same
+  two monitors the primary user's own `/etc/hyprland.conf` names by
+  description, confirming this is real hardware detection, not a stub.
+- [x] Hyprland's PID and cgroup belong to the expected compositor unit.
+  `/proc/<MainPID>/cgroup` →
+  `0::/user.slice/user-1002.slice/user@1002.service/session.slice/wayland-wm@hyprland.desktop.service`,
+  matching `systemctl --user show -p MainPID` for that exact unit.
+- [x] `FragmentPath`, `DropInPaths`, `ExecStart`, `NotifyAccess`, and unit
+  result match the generated wsmr graph.
+  `FragmentPath=/run/user/1002/systemd/user/wayland-wm@.service`,
+  `DropInPaths=.../wayland-wm@hyprland.desktop.service.d/50_custom.conf`,
+  `NotifyAccess=all`, `Result=success`,
+  `ExecStart={ path=/usr/bin/wsmr ; argv[]=/usr/bin/wsmr aux exec --
+  hyprland.desktop /usr/bin/start-hyprland ... }`.
+- [x] Graphical-session and XDG-autostart targets activate.
+  `systemctl --user is-active graphical-session.target
+  wayland-session@hyprland.desktop.target
+  wayland-session-xdg-autostart@hyprland.desktop.target` → `active active
+  active`.
+- [x] Required compositor variables reach the systemd manager environment.
+  `systemctl --user show-environment` showed `WAYLAND_DISPLAY=wayland-1`,
+  `XDG_CURRENT_DESKTOP=Hyprland`.
+- [!] A custom D-Bus-activatable fixture observes the same exported
+  variables. Not built — the same deliberate scope cut as Phase 4's P4-02
+  bullet, for the same reason (real, separate scripting work).
+- [x] `wsmr app` starts a fixture in the expected unit and slice.
+  `wsmr app -t service -- sleep 120` → `app-Hyprland-sleep@45c5beac.service`,
+  `ActiveState=active`, `Slice=app-graphical.slice`.
+- [~] An autostart desktop entry executes and records a marker. No
+  purpose-built marker fixture, but real substitute evidence: 4 genuine XDG
+  autostart entries from this real CachyOS/Noctalia install
+  (`app-cachyos-hello@autostart.service`, `app-blueman@autostart.service`,
+  `app-arch-update-tray@autostart.service`,
+  `app-geoclue-demo-agent@autostart.service`) were observed `active`,
+  confirming the autostart mechanism launches real apps correctly.
+- [~] Normal logout stops the graph and restores the baseline environment.
+  **Partially confirmed, with a real gap found.** `graphical-session.target`
+  correctly went `inactive` on `wsmr stop`, and most session-scoped
+  variables were correctly unset (all `LC_*` locale vars, `DISPLAY`,
+  `HL_INITIAL_WORKSPACE_TOKEN`, `HYPRLAND_CMD`,
+  `HYPRLAND_INSTANCE_SIGNATURE`, `MANAGERPIDFDID`, `OLDPWD`, `SHLVL`,
+  `XDG_SEAT`, `XDG_SESSION_ID`, `XDG_VTNR`, `_JAVA_AWT_WM_NONREPARENTING` —
+  a full pre/post `systemctl --user show-environment` diff was captured).
+  **Not restored**: `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP`,
+  `XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and `XDG_MENU_PREFIX` all remained
+  in the manager environment after stop. Likely root cause (well-supported,
+  not fully proven): `XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX`
+  are never touched by wsmr's own `finalize` code at all, so they cannot
+  have come from wsmr's tracked export path — they were almost certainly
+  pushed into the systemd activation environment directly by Hyprland or
+  `/usr/bin/start-hyprland` via their own `dbus-update-activation-environment`
+  call, bypassing `finalize`'s `state::append_cleanup` tracking entirely, so
+  `cleanup-env` had no record of them to unset. This is a real difference
+  from Phase 4's Tier-B smoke test, where the stub compositor explicitly
+  calls `wsmr finalize` itself and the full export set is cleanly tracked
+  and restored — a real compositor with its own independent env-export
+  habits is not the same test. Not necessarily a wsmr defect in the
+  traditional sense (upstream `uwsm` has the identical structural
+  limitation: it can only clean up what was exported through it), but it
+  does mean "exact environment restoration" is not actually true here
+  today. This is the gap slated for deeper investigation next.
+- [x] No failed units, stale state, temporary files, or owned unit files
+  remain. `systemctl --user list-units --failed` returned empty after stop.
+  (Did not separately re-verify no stale temp/manifest files on disk this
+  run — not re-checked live; only the failed-units check was repeated.)
+- [x] Collect the user journal and test artifacts for review. Done
+  throughout via live `journalctl`/`hyprland.log` inspection (see the
+  kmscon finding below for how `hyprland.log` was reached — Hyprland
+  disables stdout logging after startup). Not copied to a persisted
+  location outside this conversation.
+
+**New finding: `kmscon` fights Hyprland for seat ownership (real, reproducible,
+not a wsmr code defect).** On this host, `systemd-logind`'s `autovt@.service`
+is aliased to `kmsconvt@.service` (confirmed via `systemctl cat
+autovt@.service`), so *any* switch to an unused VT spawns `kmscon` instead of
+a bare `getty`. wsmr's own `libexec/signal-handler.sh` (ported verbatim from
+upstream) correctly detects `TERM_SESSION_TYPE=kms` in that case and sends
+kmscon the proper `\033]setBackground\a` hand-off escape sequence via the
+fd-3 messaging path `src/session/start.rs` sets up (`dup2(1,3)`/`dup2(2,4)`
+before re-execing under `systemd-cat`) — this wiring was inspected and looks
+structurally correct, matching upstream's design. Despite that, the first
+real attempt (`wsmr start` run from a login shell hosted inside `kmscon
+--vt=tty2 --no-switchvt`) produced a session with **completely
+non-functional mouse and keyboard input**. Pulling the real `hyprland.log`
+(root-only, under `/run/user/1002/hypr/<instance>/`, needed since Hyprland
+disables stdout logging right after startup) showed a repeating cycle for
+the entire life of the session: `[libseat] Disabling seat` → every input
+device removed → `[libseat] Enabling seat` → every device re-added — kmscon
+and Hyprland fighting over seat/DRM ownership on the same VT. Initial device
+enumeration was correct (real mouse/keyboards detected and named correctly),
+ruling out a plain permissions/ACL problem; this is a live ownership
+conflict, not silent denial. **Workaround (successful, verified):**
+explicitly `systemctl start getty@tty3.service` before switching there, so
+logind sees the VT already has a console and never spawns `kmsconvt@tty3` on
+top of it. `TERM_SESSION_TYPE` is then never `kms`, so wsmr's kmscon
+hand-off code never has to run, and the flapping never occurs (confirmed:
+`grep -c "Enabling seat"` on that session's log was `0`, vs. dozens on the
+first attempt). Root cause is most likely on kmscon's side, or in the
+kmscon↔Hyprland/aquamarine handoff specifically — not in wsmr's own hand-off
+code, which was verified to send the correct signal. Not deep-dived further
+given the practical workaround; worth tracking as a known interop gap for
+anyone repeating this test on a similarly kmscon-defaulted system. Upstream
+`uwsm` would very likely hit the identical conflict here, since the
+non-cooperating side (kmscon) isn't wsmr- or uwsm-specific.
 
 ### P7-04 Exercise live failure recovery
 
-- [ ] Test a compositor configuration error before readiness.
-- [ ] Test a compositor crash after readiness.
-- [ ] Test login cancellation/forced termination.
-- [ ] Verify the account can subsequently start a fresh wsmr session.
-- [ ] Verify the primary uwsm-managed account remains untouched.
+- [ ] Test a compositor configuration error before readiness. Not tested.
+- [ ] Test a compositor crash after readiness. Not tested.
+- [ ] Test login cancellation/forced termination. Not tested.
+- [~] Verify the account can subsequently start a fresh wsmr session. Not a
+  *designed* scenario, but real, live evidence landed anyway: mid-session,
+  the unrelated stale `/usr/local/bin/wsmr` binary (see P7-01) was deleted
+  while a unit generated against it was still active, causing
+  `wayland-wm-env@hyprland.service`'s `ExecStopPost` (`cleanup-env`) to fail
+  with `203/EXEC` during that session's teardown — a genuine, if
+  self-inflicted, "abandoned prior state" scenario. The very next `wsmr
+  start` (now correctly resolving `/usr/bin/wsmr`) succeeded cleanly with
+  no manual cleanup required, consistent with
+  `session::state::begin_generation`'s documented design ("a fresh
+  generation always starts by resolving any abandoned prior state first").
+- [ ] Verify the primary uwsm-managed account remains untouched. Not
+  explicitly re-verified with a targeted check this session, beyond the
+  primary user's own Hyprland session (session 4, seat0, tty1) staying
+  continuously listed as active in every `loginctl list-sessions` check run
+  throughout.
 
 ### Recovery procedure requirements
 
-- [ ] Recovery is runnable from TTY or SSH.
-- [ ] Stop only the exact disposable user's active compositor/session units.
-- [ ] Wait for units to become inactive before cleanup.
-- [ ] Remove only paths authorized by a valid wsmr ownership manifest.
-- [ ] Reload and reset only the affected user's manager state.
-- [ ] Preserve logs before cleanup.
-- [ ] Never use broad recursive removal or the current unsafe remove path.
+- [ ] Not written. Today's recovery from the stuck kmscon-conflicted session
+  was done manually and interactively (`wsmr stop` as the disposable user,
+  then a fresh attempt on a different VT), not via a scripted procedure.
 
 Acceptance criteria:
 
-- [ ] A real SDDM login reaches a usable Hyprland desktop.
-- [ ] All P7-03 assertions pass.
-- [ ] Logout returns to the display manager with exact environment restoration.
-- [ ] A second login/logout cycle also passes.
-- [ ] At least one controlled crash scenario recovers cleanly.
+- [!] A real SDDM login reaches a usable Hyprland desktop. **The premise was
+  wrong**: this system's actual display manager is `greetd` running
+  `noctalia-greeter-session`, not SDDM — `sddm.service` doesn't even exist
+  on this host (`systemctl status display-manager` → `greetd.service`).
+  Future wording should say "a real display-manager login," not name SDDM
+  specifically. Reached a working session today via a raw VT + manual
+  `wsmr start` (after working around the kmscon conflict above), not yet
+  via an actual greeter-mediated login.
+- [~] All P7-03 assertions pass. 8 of 11 confirmed clean, 1 explicitly
+  deferred (D-Bus fixture), 1 partially substituted (real autostart apps
+  instead of a custom marker), 1 found genuinely incomplete (environment
+  restoration — see above).
+- [ ] Logout returns to the display manager with exact environment
+  restoration. Not met: no display manager was involved in today's test,
+  and environment restoration has the gap described above.
+- [ ] A second login/logout cycle also passes. Not really attempted as a
+  clean pair: the first full attempt (on the VT that turned out to be
+  running `kmscon`) surfaced the seat-conflict finding above and was
+  abandoned mid-session; only the second attempt (on a plain `getty`)
+  completed a full, clean start → verify → stop cycle.
+- [~] At least one controlled crash scenario recovers cleanly. Not a
+  *designed* scenario, but the incidental stale-generation self-heal above
+  is real, positive evidence in this direction.
 
 Phase 7 evidence:
 
-- [ ] Test date and versions:
-- [ ] Harness invocation:
-- [ ] Assertion report:
-- [ ] Journal/artifact location:
-- [ ] Recovery result:
+- [x] Test date and versions: 2026-08-29; systemd 261.2-1, dbus 1.16.2-1.1,
+  hyprland 0.56.2-1, wsmr 0.1.0-1 (`pacman -Qi wsmr`), kernel
+  7.2.2-1-cachyos.
+- [!] Harness invocation: no P7-02 script exists yet. Every check above was
+  run manually and interactively (`sudo -u wsmr env ... systemctl --user
+  ...` / `hyprctl` / direct journal and `hyprland.log` inspection via
+  `sudo`), not via a repeatable harness.
+- [x] Assertion report: see P7-03 above — 8/11 clean, 1 deferred, 1
+  substituted, 1 found genuinely incomplete.
+- [x] Journal/artifact location: ephemeral. `journalctl` and
+  `/run/user/1002/hypr/*/hyprland.log` were inspected live during this
+  session; nothing was copied to a persisted location in the repo.
+- [~] Recovery result: no *designed* P7-04 recovery scenario was run; the
+  incidental stale-generation self-heal (mid-session stale-binary deletion
+  → the next `wsmr start` recovered cleanly with no manual intervention) is
+  the closest thing to positive recovery evidence collected today.
 
 ---
 

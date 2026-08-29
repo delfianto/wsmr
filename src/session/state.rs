@@ -28,11 +28,10 @@
 //! closed: if an old session's `cleanup-env` (its unit's `ExecStopPost`) is
 //! *still running* at the exact moment a brand new session's `prepare-env`
 //! starts — a narrow window, since `start` already refuses to begin while
-//! any compositor unit is active/activating (Phase 0) — the late
-//! `cleanup-env` has no way to carry its own generation id forward across
-//! the process boundary (unit templates are static; the id only exists at
-//! runtime), so it will act on whatever generation is current by the time it
-//! acquires the lock. See `fix-plan.md` Phase 1 evidence.
+//! any compositor unit is active/activating — the late `cleanup-env` has no
+//! way to carry its own generation id forward across the process boundary
+//! (unit templates are static; the id only exists at runtime), so it will
+//! act on whatever generation is current by the time it acquires the lock.
 
 use crate::env::files::{self, CleanupEntry};
 use crate::error::{Error, Result};
@@ -255,9 +254,8 @@ mod tests {
     #[test]
     fn concurrent_appends_from_real_os_threads_lose_no_entries() {
         // Exercises the actual flock-based lock across genuine OS threads
-        // (not just sequential calls), directly covering the P1-01
-        // acceptance criterion that concurrent finalize/watcher-style writers
-        // can't lose each other's cleanup entries.
+        // (not just sequential calls): concurrent finalize/watcher-style
+        // writers can't lose each other's cleanup entries.
         let rt = rt_dir();
         std::fs::create_dir_all(rt.join("wsmr")).unwrap();
         with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {

@@ -1,16 +1,16 @@
 #!/bin/sh
-# Fake terminal emulator for wsmr integration tests (P4-01).
+# Fake terminal emulator for wsmr integration tests.
 #
 # Real terminal emulators (foot, alacritty, xterm, ...) support `-e CMD
 # [ARGS...]`: run CMD (with ARGS) as the terminal's child instead of an
 # interactive shell — that's what the paired `wsmrterm.desktop` fixture's
 # `TerminalArgExec=-e` tells wsmr to build. Plain `/bin/sh` does *not*
 # understand `-e` that way (`sh -e true` sets errexit and then tries to
-# *open a script file* named "true" — this is the literal "shell unable to
-# open true" failure the finding named), so a bare shell was never a valid
-# terminal fixture. This one is: it records every argument it's invoked
-# with, then finds "-e" and execs everything after it for real, so both the
-# invocation *and* the payload's own success/failure are observable.
+# *open a script file* named "true", failing with "shell unable to open
+# true"), so a bare shell was never a valid terminal fixture. This one is:
+# it records every argument it's invoked with, then finds "-e" and execs
+# everything after it for real, so both the invocation *and* the payload's
+# own success/failure are observable.
 LOG="${WSMR_FAKE_TERM_LOG:-/tmp/wsmr-fake-term.log}"
 printf '%s\n' "$*" >>"$LOG"
 

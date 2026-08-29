@@ -490,10 +490,10 @@ Exec=firefox --new-window
         );
     }
 
-    /// P5-02: precedence must be `LANGUAGE`, then `LC_ALL`, then
-    /// `LC_MESSAGES`, then `LANG` — first *set* var wins outright, matching
-    /// `xdg.Locale.expand_languages` exactly (cross-checked against the
-    /// installed `python-pyxdg` source, not just the fix-plan wording).
+    /// Precedence must be `LANGUAGE`, then `LC_ALL`, then `LC_MESSAGES`, then
+    /// `LANG` — first *set* var wins outright, matching
+    /// `xdg.Locale.expand_languages` exactly (cross-checked directly against
+    /// the installed `python-pyxdg` source).
     #[test]
     fn locale_precedence_language_then_lc_all_then_lc_messages_then_lang() {
         use crate::testutil::with_env;

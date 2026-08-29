@@ -129,15 +129,15 @@ fn handle_app(args: &[String]) -> Result<String> {
 }
 
 /// Send a reply, logging (not propagating) a failure — a client that gave up
-/// before reading its reply must not take the whole daemon loop down with it
-/// (P5-04). Used by every reply site in [`run`]'s main loop.
+/// before reading its reply must not take the whole daemon loop down with
+/// it. Used by every reply site in [`run`]'s main loop.
 fn send_reply(text: &str) {
     if let Err(e) = send(text) {
         eprintln!("wsmr: app daemon: failed to send reply: {e}");
     }
 }
 
-/// How long [`send`] waits for a reader before giving up (P5-04).
+/// How long [`send`] waits for a reader before giving up.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 const SEND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -302,8 +302,8 @@ mod tests {
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
     }
 
-    /// P5-04: with no reader ever showing up, the bounded open must return
-    /// (an error) within roughly `timeout` — not hang forever like a plain
+    /// With no reader ever showing up, the bounded open must return (an
+    /// error) within roughly `timeout` — not hang forever like a plain
     /// blocking `OpenOptions::write(true).open()` on a FIFO would.
     #[test]
     fn open_fifo_for_write_bounded_times_out_deterministically() {

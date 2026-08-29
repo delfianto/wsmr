@@ -2,10 +2,10 @@
 //!
 //! Building a plan only stats and reads existing files plus the ownership
 //! [`Manifest`] — it never creates, writes, renames, or deletes anything.
-//! That split is what makes `--dry-run` strictly read-only (P0-02) and lets
+//! That split is what makes `--dry-run` strictly read-only and lets
 //! generation validate the *complete* set of intended changes — including
 //! refusing to touch anything wsmr doesn't verifiably own — before any file
-//! is written (P0-04).
+//! is written.
 
 use super::manifest::Manifest;
 use super::templates::{self, DropinInput, RenderCtx};

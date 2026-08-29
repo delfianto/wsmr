@@ -7,8 +7,8 @@
 //! `@WAITPID_BIN@` placeholders substituted by [`render`].
 //!
 //! `tests/uwsm_unit_compat.rs` verifies this byte-identity claim against a
-//! real uwsm 0.26.7 install's actual shipped units (P6-02) — this isn't just
-//! an aspiration in a comment.
+//! real uwsm 0.26.7 install's actual shipped units — this isn't just an
+//! aspiration in a comment.
 
 /// An installed unit file: its name and (possibly templated) body.
 pub struct UnitTemplate {

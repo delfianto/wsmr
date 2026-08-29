@@ -63,7 +63,7 @@ pub fn waitpid(pid: i32) -> Result<()> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
     // pidfd_open itself would just fail with EINVAL on this, but a dedicated
-    // check gives a clearer error and avoids the syscall entirely (P5-05).
+    // check gives a clearer error and avoids the syscall entirely.
     if pid <= 0 {
         return Err(Error::InvalidArg(format!("invalid PID: {pid}")));
     }
@@ -79,7 +79,7 @@ pub fn waitpid(pid: i32) -> Result<()> {
         return Err(Error::io("pidfd_open", e));
     }
     // Owned so every exit below — including the EINTR-retry loop growing a
-    // new return path later — closes it exactly once, automatically (P5-05).
+    // new return path later — closes it exactly once, automatically.
     // SAFETY: `fd` was just returned by a successful pidfd_open, so it's a
     // valid, currently-unowned, open file descriptor.
     let fd = unsafe { OwnedFd::from_raw_fd(fd as libc::c_int) };
@@ -151,7 +151,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn waitpid_rejects_non_positive_pids() {
-        // P5-05: validated before the syscall, not left to a raw EINVAL.
+        // Validated before the syscall, not left to a raw EINVAL.
         assert!(waitpid(0).is_err());
         assert!(waitpid(-1).is_err());
     }

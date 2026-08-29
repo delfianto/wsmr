@@ -21,7 +21,8 @@ session graph. There is no hand-holding here and no "paste these dotfiles" path.
 > **not yet run in CI** — see [Development & testing](#development--testing)) —
 > it has not babysat a daily-driver desktop for months. See
 > [Status & disclaimer](#status--disclaimer) and
-> [`fix-plan.md`](fix-plan.md) for exactly what has and hasn't been verified.
+> [`docs/fix-plan.md`](docs/fix-plan.md) for exactly what has and hasn't been
+> verified.
 
 ## Why this exists
 
@@ -226,8 +227,8 @@ today:
 ```sh
 just test-linux      # Tier A: build + unit tests in a Debian container
 just integration     # Tier B: full session bootstrap on systemd-as-PID-1 —
-                      # known to ignore some real failures right now (see fix-plan.md
-                      # Phase 4); don't read a green run as full functional coverage yet
+                      # asserts the happy-path lifecycle as hard, unignored
+                      # checks; not every failure/recovery scenario is covered yet
 just coverage        # merged unit + integration coverage; >= 90% lines is the
                       # authoritative *local* gate — not enforced by CI
 ```
@@ -238,18 +239,21 @@ See [`CLAUDE.md`](CLAUDE.md) for the container/coverage internals,
 [`docs/cli-compatibility.md`](docs/cli-compatibility.md) for the exact
 upstream-compatibility target and known CLI divergences,
 [`docs/coexistence.md`](docs/coexistence.md) for how wsmr avoids stepping on
-a coexisting uwsm installation, and [`fix-plan.md`](fix-plan.md) for the live
-tracker of what's verified vs. still open.
+a coexisting uwsm installation, and [`docs/fix-plan.md`](docs/fix-plan.md) for
+the live tracker of what's verified vs. still open.
 
 ## Status & disclaimer
 
 This is an experiment. It reaches into your login session, your `systemd --user`
 manager, and your D-Bus activation environment *on purpose*. The lifecycle is
 verified against a stub compositor on real systemd, run locally in a
-container (`just integration`) — **not currently run in CI**, and known to
-ignore some real failures until `fix-plan.md`'s Phase 4 lands. Unit tests
-(`cargo test`) and lint/format *do* run in CI on every push/PR. None of this
-adds up to a hardened, daily-driven session manager yet.
+container (`just integration`) — **not currently run in CI**. It has also
+had a first, partial real-hardware pass (real Hyprland, real monitors, a
+real disposable user) with a real environment-restoration gap found and not
+yet fixed (see `docs/fix-plan.md`'s Phase 7 for exactly what's covered and
+what isn't). Unit tests (`cargo test`) and lint/format *do*
+run in CI on every push/PR. None of this adds up to a hardened,
+daily-driven session manager yet.
 
 If you run it on your actual machine and your session faceplants, your autostart
 turns to confetti, you get dumped back to a TTY, or your toaster gains sentience

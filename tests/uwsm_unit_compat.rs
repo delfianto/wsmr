@@ -1,5 +1,5 @@
 //! Regression check: wsmr's generated static graph (`units::templates::GRAPH`)
-//! against uwsm 0.26.7's real, package-shipped unit files (P6-02).
+//! against uwsm 0.26.7's real, package-shipped unit files.
 //!
 //! Every string below was captured verbatim from
 //! `/usr/lib/systemd/user/*` on a host with the real `uwsm` 0.26.7 package

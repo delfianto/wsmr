@@ -53,7 +53,7 @@ jobs:
 
       # Single source of truth: read the floor from Cargo.toml itself rather
       # than duplicating the version number in this workflow, so the two
-      # can't silently drift apart (fix-plan.md P6-01).
+      # can't silently drift apart.
       - name: Read MSRV from Cargo.toml
         id: msrv
         run: |

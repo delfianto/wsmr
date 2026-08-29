@@ -5,7 +5,7 @@
 # asserting the whole lifecycle is *observably* correct rather than merely
 # executed. Every claimed behavior below is a hard assertion; `set -euo
 # pipefail` means an unexpected failure anywhere stops the script instead of
-# silently passing (P4-01). Deliberately-expected-to-fail commands are always
+# silently passing. Deliberately-expected-to-fail commands are always
 # wrapped in `if ...; then fail ...; fi`, never bare `|| true`, so a genuine
 # crash still surfaces.
 set -euo pipefail
@@ -21,8 +21,7 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 
 # Collect failed-unit state and the recent user journal on any failure exit —
 # including one `set -e` triggers on an unguarded nonzero command, not just
-# explicit `fail` calls (P4-01: "add a trap that collects status and
-# journals on failure").
+# explicit `fail` calls.
 collect_diagnostics() {
     echo "---- diagnostics: failed units ----" >&2
     systemctl --user list-units --failed --no-legend >&2 || true
@@ -235,11 +234,11 @@ case "$RESP" in
     *) fail "app-daemon emitted unexpected line: '$RESP'" ;;
 esac
 
-echo "== app-daemon: missing reader on a reply is bounded, not fatal (P4-03) =="
+echo "== app-daemon: missing reader on a reply is bounded, not fatal =="
 printf '%s\0' ping > "$RT/wsmr-app-daemon-in"
 # Deliberately don't read wsmr-app-daemon-out this time: the daemon's bounded
-# FIFO-open (P5-04) must give up after its 5s SEND_TIMEOUT and log, not hang
-# the daemon loop or crash it.
+# FIFO-open must give up after its 5s SEND_TIMEOUT and log, not hang the
+# daemon loop or crash it.
 sleep 7
 printf '%s\0' ping > "$RT/wsmr-app-daemon-in"
 PONG2=$(timeout 10 head -1 "$RT/wsmr-app-daemon-out")

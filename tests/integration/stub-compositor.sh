@@ -4,15 +4,15 @@
 # A real compositor creates a Wayland socket and puts WAYLAND_DISPLAY into
 # the systemd/D-Bus activation environment. This stub does both: a real
 # listening Unix socket at $XDG_RUNTIME_DIR/wayland-stub (so "the socket
-# exists and is a socket" is a real assertion, not just an env var — P4-01),
-# then calls `wsmr finalize` itself — the way a real self-integrating
-# compositor (Sway, Hyprland, ...) does — rather than relying only on wsmr's
-# fallback `aux readiness` watcher. Run as this unit's own ExecStart, it's a
+# exists and is a socket" is a real assertion, not just an env var), then
+# calls `wsmr finalize` itself — the way a real self-integrating compositor
+# (Sway, Hyprland, ...) does — rather than relying only on wsmr's fallback
+# `aux readiness` watcher. Run as this unit's own ExecStart, it's a
 # foreground child of the same invocation and so inherits the *real*
-# $NOTIFY_SOCKET systemd provisioned for this unit (P4-01/P4-02: proves
-# finalize works in the context it's actually designed for, not a detached
-# unit that never had a notify socket to begin with). WSMR_BIN is pushed into
-# the manager's activation environment by smoke.sh before `wsmr start` runs.
+# $NOTIFY_SOCKET systemd provisioned for this unit — proving finalize works
+# in the context it's actually designed for, not a detached unit that never
+# had a notify socket to begin with. WSMR_BIN is pushed into the manager's
+# activation environment by smoke.sh before `wsmr start` runs.
 set -eu
 
 SOCK_NAME=wayland-stub
