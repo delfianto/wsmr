@@ -85,6 +85,20 @@ has the identical kmscon problem wsmr does.** Root cause is on kmscon's
 side, or in the kmscon↔Hyprland/aquamarine hand-off specifically — not in
 either session manager's own signal-handling code.
 
+**Tracked upstream, not resolved.**
+[hyprwm/Hyprland#7423](https://github.com/hyprwm/Hyprland/issues/7423)
+("Crash when launched in kmscon console", filed August 2024) reports the
+same category of symptom independently — including from another CachyOS
+user on the same `autovt@` → `kmsconvt@` default — and was closed
+**not planned** rather than fixed. The thread is genuinely mixed: one
+reporter's crash was separately attributed to a missing GPU driver, but
+others in the same thread describe the actual kmscon/Hyprland conflict and
+independently landed on mitigations that match this document's own
+findings (running `seatd`, or simply not letting kmscon claim the target
+VT). Nobody has root-caused it to a specific commit on either project's
+side; it's a known, recurring interop gap, not something either side has
+formally owned.
+
 ### Why doesn't a real display-manager login hit this?
 
 This host's actual greeter is `greetd` running `noctalia-greeter-session`
@@ -165,6 +179,24 @@ SIGSEGV) and the exact same outcome (`Result=start-limit-hit`,
 `wayland-wm@.service`; this portal version mishandles what happens next
 identically either way, regardless of which tool asked.
 
+**Tracked upstream, still open.**
+[hyprwm/xdg-desktop-portal-hyprland#330](https://github.com/hyprwm/xdg-desktop-portal-hyprland/issues/330)
+("xdph crashes (SEGV) and causes a restart loop on normal Hyprland exit",
+filed May 2025) is close to an exact match for this finding: a SIGSEGV on
+normal Hyprland exit, a `Restart=on-failure` loop, and `systemd` eventually
+giving up with "Start request repeated too quickly" — the same shape as
+this document's `StartLimitBurst`/`start-limit-hit` outcome, down to
+`xdg-desktop-portal-gtk` also showing up as a casualty in the reporter's
+own logs. Multiple independent users have piled on confirming the same
+crash across Hyprland versions from `0.49.0` through at least mid-2026 —
+spanning well before and after the `0.56.2-1`/`1.4.1-1.1` pairing tested
+here — and as of its most recent update the issue carries no triage label
+and no linked fix. One reporter's workaround: a small shell script that
+explicitly `systemctl --user stop`s all three portal services and waits
+for them to go fully inactive *before* calling `hyprctl dispatch exit`,
+sidestepping the teardown race entirely (at the cost of slower GTK-portal
+startup on the next login, by their own account — not a clean win).
+
 ## Hyprland leaves five environment variables behind on its own
 
 **Root-caused for two of the five. Confirmed present under both wsmr and
@@ -236,6 +268,46 @@ stub-compositor case it actually exercises.
 session manager** — upstream `uwsm` wraps the exact same binary and would
 hit the exact same re-export bug. wsmr correctly cleaned up 100% of what it
 itself exported through `finalize`.
+
+**Confirmed upstream, and a real mitigation already exists.**
+[hyprwm/Hyprland#7083](https://github.com/hyprwm/Hyprland/issues/7083)
+("Option to disable activation environment management", August 2024) —
+raised by `uwsm`'s own author, Vladimir-csp — got exactly this root cause
+confirmed by the PR that closed it,
+[hyprwm/Hyprland#7358](https://github.com/hyprwm/Hyprland/pull/7358):
+*"Especially the way `dbus-update-activation-environment` and the original
+dbus' environment works: it can not unset stuff. [...] The only cleanup
+option with original dbus is to export empty strings, and execute without
+`--systemd`."* That's the same bug this document root-caused independently
+via `strings` on the binary, confirmed from the other direction by the code
+author. That PR added **`HYPRLAND_NO_SD_VARS`**: set truthy in the
+environment before Hyprland starts, it skips Hyprland's own
+`systemctl`/`dbus-update-activation-environment` calls entirely — both the
+startup import *and* the shutdown unset/re-export — delegating the whole
+lifecycle to whatever session manager is running it. This has shipped
+since well before the `0.56.2-1` tested here. **Not yet tried against a
+real wsmr session** — since wsmr's own `finalize`/`cleanup-env` already
+handles the complete set/unset lifecycle independently, exporting
+`HYPRLAND_NO_SD_VARS=1` ahead of `aux exec` should eliminate this entire
+finding outright, and is worth verifying in a follow-up pass rather than
+just asserting. Upstream `uwsm` does not currently set it either (checked
+against its current source), so a real uwsm session hits this identically
+today.
+
+One more thing worth watching rather than acting on yet:
+[hyprwm/Hyprland#15776](https://github.com/hyprwm/Hyprland/pull/15776)
+(merged 2026-08-22 — *after* the `0.56.2-1` build tested here was cut)
+adds an unrelated feature (automatic `hyprland-session.target`
+start/stop) but, in doing so, also makes Hyprland skip its own
+`systemctl`/`dbus-update-activation-environment` calls automatically
+whenever `$MANAGERPID` is set — which `systemd` sets on **every** unit it
+manages (confirmed in `systemd`'s own `src/core/service.c`), meaning
+`wayland-wm@.service` already carries it with zero configuration from
+wsmr or uwsm. Once a tagged Hyprland release includes this, sessions
+started as a systemd unit should stop hitting this bug automatically, no
+`HYPRLAND_NO_SD_VARS` needed. Not yet tested here — the tested version
+predates the merge — but worth re-running this finding against once a
+release picks it up.
 
 ## Version/environment summary
 
