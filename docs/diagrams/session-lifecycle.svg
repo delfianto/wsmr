@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 1360" font-family="Inter,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif">
+  <rect x="0" y="0" width="960" height="1360" fill="#ffffff"/>
+  <defs>
+    <filter id="sl-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.16"/>
+    </filter>
+    <marker id="sl-indigo" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0,0.5 L8,4.5 L0,8.5 Z" fill="#4f46e5"/>
+    </marker>
+    <marker id="sl-slate" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0,0.5 L8,4.5 L0,8.5 Z" fill="#64748b"/>
+    </marker>
+    <marker id="sl-rose" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0,0.5 L8,4.5 L0,8.5 Z" fill="#e11d48"/>
+    </marker>
+  </defs>
+
+  <text x="480" y="22" text-anchor="middle" font-size="15" font-weight="700" fill="#0f172a">wsmr session lifecycle: start (top) and stop (bottom)</text>
+  <text x="480" y="46" text-anchor="middle" font-size="12" font-weight="700" fill="#4f46e5">start</text>
+
+  <!-- S1 -->
+  <rect x="170" y="56" width="620" height="46" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="84" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#312e81">wsmr start &lt;wm&gt;</text>
+
+  <line x1="480" y1="102" x2="480" y2="142" stroke="#4f46e5" stroke-width="2" marker-end="url(#sl-indigo)"/>
+  <!-- S2 -->
+  <rect x="170" y="142" width="620" height="46" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="170" text-anchor="middle" font-size="12" fill="#312e81">refuse if a compositor is already active</text>
+
+  <line x1="480" y1="188" x2="480" y2="228" stroke="#4f46e5" stroke-width="2" marker-end="url(#sl-indigo)"/>
+  <!-- S3 -->
+  <rect x="170" y="228" width="620" height="46" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="256" text-anchor="middle" font-size="12" fill="#312e81">generate units + per-compositor 50_custom.conf drop-ins, daemon-reload</text>
+
+  <line x1="480" y1="274" x2="480" y2="314" stroke="#4f46e5" stroke-width="2" marker-end="url(#sl-indigo)"/>
+  <!-- S4 -->
+  <rect x="170" y="314" width="620" height="46" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="342" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12" fill="#312e81">start wayland-session-bindpid@&lt;pid&gt;.service</text>
+
+  <line x1="480" y1="360" x2="480" y2="400" stroke="#4f46e5" stroke-width="2" marker-end="url(#sl-indigo)"/>
+  <!-- S5 -->
+  <rect x="170" y="400" width="620" height="46" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="428" text-anchor="middle" font-size="12" fill="#312e81">snapshot the login environment to $XDG_RUNTIME_DIR/wsmr/</text>
+
+  <line x1="480" y1="446" x2="480" y2="486" stroke="#4f46e5" stroke-width="2" marker-end="url(#sl-indigo)"/>
+  <!-- S6 -->
+  <rect x="170" y="486" width="620" height="58" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="510" text-anchor="middle" font-size="12" fill="#312e81">exec -&gt; systemd-cat -&gt; signal-handler.sh -&gt; the envelope target</text>
+  <text x="480" y="528" text-anchor="middle" font-size="10" font-style="italic" fill="#4338ca">this process is replaced here — it becomes the session anchor</text>
+
+  <!-- branch -->
+  <text x="480" y="572" text-anchor="middle" font-size="11.5" font-style="italic" fill="#64748b">meanwhile, started independently by the systemd units:</text>
+  <line x1="480" y1="544" x2="480" y2="596" stroke="#64748b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#sl-slate)"/>
+
+  <!-- U1 -->
+  <rect x="170" y="596" width="620" height="58" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="619" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#312e81">wsmr aux prepare-env</text>
+  <text x="480" y="638" text-anchor="middle" font-size="10" font-style="italic" fill="#4338ca">deduce seat/VT/session via logind, run the POSIX env loader, diff env, push delta</text>
+
+  <line x1="480" y1="654" x2="480" y2="690" stroke="#4f46e5" stroke-width="2" marker-end="url(#sl-indigo)"/>
+  <!-- U2 (compositor) -->
+  <rect x="170" y="690" width="620" height="58" rx="12" fill="#fef3c7" stroke="#d97706" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="713" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#78350f">wsmr aux exec</text>
+  <text x="480" y="732" text-anchor="middle" font-size="10" font-style="italic" fill="#92400e">spawns the readiness watcher, then execs the compositor in the unit's cgroup</text>
+
+  <line x1="480" y1="748" x2="480" y2="784" stroke="#4f46e5" stroke-width="2" marker-end="url(#sl-indigo)"/>
+  <!-- U3 -->
+  <rect x="170" y="784" width="620" height="58" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="807" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#312e81">wsmr aux readiness</text>
+  <text x="480" y="826" text-anchor="middle" font-size="10" font-style="italic" fill="#4338ca">wait for WAYLAND_DISPLAY (+ UWSM_WAIT_VARNAMES), sync the delta, systemd-notify READY=1</text>
+
+  <line x1="480" y1="842" x2="480" y2="882" stroke="#059669" stroke-width="2" marker-end="url(#sl-indigo)"/>
+  <!-- milestone -->
+  <rect x="230" y="882" width="500" height="46" rx="12" fill="#d1fae5" stroke="#059669" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="910" text-anchor="middle" font-size="13" font-weight="700" fill="#065f46">graphical-session.target is reached</text>
+
+  <!-- STOP -->
+  <line x1="20" y1="954" x2="940" y2="954" stroke="#cbd5e1" stroke-width="1"/>
+  <text x="480" y="988" text-anchor="middle" font-size="12" font-weight="700" fill="#e11d48">stop (wsmr stop, compositor exit, or crash)</text>
+
+  <!-- T1 -->
+  <rect x="170" y="1000" width="620" height="46" rx="12" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="1028" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#881337">wsmr stop</text>
+
+  <line x1="480" y1="1046" x2="480" y2="1082" stroke="#e11d48" stroke-width="2" marker-end="url(#sl-rose)"/>
+  <!-- T2 -->
+  <rect x="170" y="1082" width="620" height="46" rx="12" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="1110" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12" fill="#881337">systemd stops wayland-wm@&lt;wm&gt;.service</text>
+
+  <line x1="480" y1="1128" x2="480" y2="1164" stroke="#e11d48" stroke-width="2" marker-end="url(#sl-rose)"/>
+  <!-- T3 -->
+  <rect x="170" y="1164" width="620" height="58" rx="12" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="1188" text-anchor="middle" font-size="12" fill="#881337">BindsTo / PropagatesStopTo / Conflicts cascade tears down</text>
+  <text x="480" y="1206" text-anchor="middle" font-size="12" fill="#881337">the whole session graph as one unit</text>
+
+  <line x1="480" y1="1222" x2="480" y2="1258" stroke="#e11d48" stroke-width="2" marker-end="url(#sl-rose)"/>
+  <!-- T4 -->
+  <rect x="170" y="1258" width="620" height="58" rx="12" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.75" filter="url(#sl-shadow)"/>
+  <text x="480" y="1282" text-anchor="middle" font-size="12" fill="#881337">cleanup-env (ExecStopPost of wayland-wm-env@) restores the</text>
+  <text x="480" y="1300" text-anchor="middle" font-size="12" fill="#881337">activation environment from the recorded, generation-scoped delta</text>
+</svg>

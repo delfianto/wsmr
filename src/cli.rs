@@ -1,6 +1,6 @@
 //! Command-line surface (clap derive), mirroring uwsm's argparse tree minus the
-//! compositor `select` subcommand (out of scope — SDDM handles selection).
-//! See `docs/uwsm-core-analysis.md` §1.
+//! compositor `select` subcommand (out of scope — the display manager handles
+//! selection). See `docs/architecture.md`'s CLI surface section.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 

@@ -206,11 +206,11 @@ fn classify_dropin(
 /// Only per-compositor `50_custom.conf` drop-ins and the fixed tweak
 /// drop-ins are ever removed here. The static graph units
 /// (`templates::GRAPH`) are deliberately excluded even if somehow present in
-/// the manifest: they are byte-identical, shared infrastructure with uwsm
-/// (see `docs/coexistence.md`), so content alone can never distinguish
-/// "wsmr's copy" from "uwsm's copy" — removing them is never safe to
-/// automate. (Upstream's `"generic"` mark, which covers its shipped-static
-/// graph, therefore has nothing to match here.)
+/// the manifest: they are byte-identical, shared infrastructure with uwsm, so
+/// content alone can never distinguish "wsmr's copy" from "uwsm's copy" —
+/// removing them is never safe to automate. (Upstream's `"generic"` mark,
+/// which covers its shipped-static graph, therefore has nothing to match
+/// here.)
 pub fn plan_remove_all(dir: &Path, marks: Option<&[String]>) -> Result<RemovalPlan> {
     let manifest = Manifest::load(dir)?;
     let mut plan = RemovalPlan {

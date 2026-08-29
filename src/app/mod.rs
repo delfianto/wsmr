@@ -1,6 +1,6 @@
 //! Application launching (`wsmr app`): desktop-entry parsing, `Exec` field
 //! expansion, entry lookup, unit naming, and `systemd-run` assembly. See
-//! `docs/uwsm-core-analysis.md` §6 and `REFERENCE.md` §13.
+//! `docs/architecture.md`'s app-launching section and `REFERENCE.md` §13.
 
 pub mod daemon;
 pub mod entry;

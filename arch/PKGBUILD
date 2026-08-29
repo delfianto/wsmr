@@ -61,8 +61,8 @@ package() {
 	install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 	install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 	install -Dm0644 docs/fix-plan.md "$pkgdir/usr/share/doc/$pkgname/fix-plan.md"
-	install -Dm0644 docs/cli-compatibility.md "$pkgdir/usr/share/doc/$pkgname/cli-compatibility.md"
-	install -Dm0644 docs/coexistence.md "$pkgdir/usr/share/doc/$pkgname/coexistence.md"
+	install -Dm0644 docs/architecture.md "$pkgdir/usr/share/doc/$pkgname/architecture.md"
+	install -Dm0644 docs/known-issues.md "$pkgdir/usr/share/doc/$pkgname/known-issues.md"
 	# See arch/session/hyprland-wsmr.desktop's own header for why this is
 	# Hyprland-specific despite wsmr itself being compositor-agnostic.
 	install -Dm0644 arch/session/hyprland-wsmr.desktop \

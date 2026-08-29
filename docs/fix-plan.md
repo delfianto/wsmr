@@ -4,6 +4,11 @@ This document is the canonical tracker for findings from the implementation
 review. It is intentionally planning-only: checking an item means its change has
 been implemented **and** its acceptance criteria have passed.
 
+For a distilled, standalone write-up of the real-world bugs found during
+Phase 7 (not the raw evidence trail), see
+[`docs/known-issues.md`](known-issues.md); for how wsmr works in general,
+see [`docs/architecture.md`](architecture.md).
+
 ## Tracker conventions
 
 - [ ] Not started
@@ -1320,7 +1325,7 @@ Phase 6 evidence:
 **Prerequisites:** G0 and G1 are complete. Do not use the primary user's active
 uwsm-managed desktop for the first run.
 
-**Scaffolding:** [`arch/`](arch/README.md) has the PKGBUILD, the disposable-user
+**Scaffolding:** [`arch/`](../arch/README.md) has the PKGBUILD, the disposable-user
 setup script (`arch/e2e-install.sh`), and the session config (wayland-sessions
 entries + Hyprland config notes) P7-01 needs. As of 2026-08-29 it has been run
 for real against a disposable `wsmr` account on the actual target machine —

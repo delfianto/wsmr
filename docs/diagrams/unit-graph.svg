@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 850" font-family="Inter,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif">
+  <rect x="0" y="0" width="1100" height="850" fill="#ffffff"/>
+  <defs>
+    <filter id="ug-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0f172a" flood-opacity="0.16"/>
+    </filter>
+    <marker id="ug-indigo" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0,0.5 L8,4.5 L0,8.5 Z" fill="#4f46e5"/>
+    </marker>
+    <marker id="ug-orange" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+      <path d="M0,0.5 L8,4.5 L0,8.5 Z" fill="#ea580c"/>
+    </marker>
+  </defs>
+
+  <text x="550" y="20" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">wsmr per-compositor systemd --user unit graph (%i = compositor id)</text>
+
+  <!-- Tier 1: graphical-session.target -->
+  <rect x="390" y="30" width="320" height="48" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ug-shadow)"/>
+  <text x="550" y="59" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#312e81">graphical-session.target</text>
+
+  <!-- arrow tier2 -> tier1 -->
+  <line x1="550" y1="150" x2="550" y2="78" stroke="#4f46e5" stroke-width="2" marker-end="url(#ug-indigo)"/>
+  <text x="566" y="118" font-size="10.5" fill="#4f46e5">BindsTo / Before</text>
+
+  <!-- Tier 2: wayland-session@.target -->
+  <rect x="390" y="150" width="320" height="48" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ug-shadow)"/>
+  <text x="550" y="179" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#312e81">wayland-session@&lt;wm&gt;.target</text>
+
+  <!-- Tier 3 boxes (uniform 250x56) -->
+  <rect x="26" y="270" width="250" height="56" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ug-shadow)"/>
+  <text x="151" y="303" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12" fill="#312e81">wayland-session-pre@.target</text>
+
+  <rect x="292" y="270" width="250" height="56" rx="12" fill="#fef3c7" stroke="#d97706" stroke-width="1.75" filter="url(#ug-shadow)"/>
+  <text x="417" y="296" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12" fill="#78350f">wayland-wm@&lt;wm&gt;.service</text>
+  <text x="417" y="313" text-anchor="middle" font-size="9.5" font-style="italic" fill="#92400e">the compositor process</text>
+
+  <rect x="558" y="270" width="250" height="56" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ug-shadow)"/>
+  <text x="683" y="303" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12" fill="#312e81">wayland-session-waitenv.service</text>
+
+  <rect x="824" y="270" width="250" height="56" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ug-shadow)"/>
+  <text x="949" y="296" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12" fill="#312e81">wayland-session-</text>
+  <text x="949" y="312" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12" fill="#312e81">xdg-autostart@.target</text>
+
+  <!-- arrows tier3 -> tier2, routed as two rounded "bus lanes" (solid Requires above dashed Wants) -->
+  <path d="M151,270 L151,222 L454,222 L454,198" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linejoin="round" marker-end="url(#ug-indigo)"/>
+  <path d="M417,270 L417,222 L518,222 L518,198" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linejoin="round" marker-end="url(#ug-indigo)"/>
+  <path d="M683,270 L683,246 L582,246 L582,198" fill="none" stroke="#4f46e5" stroke-width="2" stroke-dasharray="6 5" stroke-linejoin="round" marker-end="url(#ug-indigo)"/>
+  <path d="M949,270 L949,246 L646,246 L646,198" fill="none" stroke="#4f46e5" stroke-width="2" stroke-dasharray="6 5" stroke-linejoin="round" marker-end="url(#ug-indigo)"/>
+  <text x="300" y="214" text-anchor="middle" font-size="10.5" fill="#4f46e5">Requires</text>
+  <text x="800" y="238" text-anchor="middle" font-size="10.5" fill="#4f46e5">Wants</text>
+
+  <!-- Tier 4: env preloader -->
+  <rect x="26" y="400" width="250" height="48" rx="12" fill="#eef2ff" stroke="#4f46e5" stroke-width="1.75" filter="url(#ug-shadow)"/>
+  <text x="151" y="429" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12" fill="#312e81">wayland-wm-env@&lt;wm&gt;.service</text>
+
+  <line x1="151" y1="400" x2="151" y2="326" stroke="#4f46e5" stroke-width="2" marker-end="url(#ug-indigo)"/>
+  <text x="163" y="366" font-size="9.5" fill="#4f46e5">Requires</text>
+
+  <!-- Shutdown target, triggered by wm@ / wm-env@ -->
+  <rect x="350" y="520" width="400" height="64" rx="12" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.75" stroke-dasharray="7 4" filter="url(#ug-shadow)"/>
+  <text x="550" y="547" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="12.5" fill="#881337">wayland-session-shutdown.target</text>
+  <text x="550" y="566" text-anchor="middle" font-size="9.5" font-style="italic" fill="#9f1239">Conflicts= the whole graph above -&gt; stops it as one unit</text>
+
+  <path d="M417,326 L417,486 L500,486 L500,520" fill="none" stroke="#ea580c" stroke-width="2" stroke-linejoin="round" marker-end="url(#ug-orange)"/>
+  <path d="M151,448 L151,498 L560,498 L560,520" fill="none" stroke="#ea580c" stroke-width="2" stroke-linejoin="round" marker-end="url(#ug-orange)"/>
+  <text x="480" y="472" text-anchor="middle" font-size="10.5" fill="#ea580c">OnSuccess / OnFailure</text>
+
+  <!-- divider -->
+  <line x1="26" y1="608" x2="1074" y2="608" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="2 4"/>
+  <text x="550" y="624" text-anchor="middle" font-size="10.5" font-style="italic" fill="#64748b">independent / auxiliary units (not part of the dependency chain above)</text>
+
+  <!-- Aux row (uniform 250x70) -->
+  <rect x="26" y="640" width="250" height="70" rx="12" fill="#f8fafc" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4" filter="url(#ug-shadow)"/>
+  <text x="151" y="664" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11">wayland-session-</text>
+  <text x="151" y="680" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11">bindpid@&lt;pid&gt;.service</text>
+  <text x="151" y="698" text-anchor="middle" font-size="9" font-style="italic" fill="#475569">binds session lifetime to launching PID</text>
+
+  <rect x="292" y="640" width="250" height="70" rx="12" fill="#f8fafc" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4" filter="url(#ug-shadow)"/>
+  <text x="417" y="664" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11">wayland-session-</text>
+  <text x="417" y="680" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11">envelope@&lt;wm&gt;.target</text>
+  <text x="417" y="698" text-anchor="middle" font-size="9" font-style="italic" fill="#475569">what `start` exec's onto</text>
+
+  <rect x="558" y="640" width="250" height="70" rx="12" fill="#f8fafc" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4" filter="url(#ug-shadow)"/>
+  <text x="683" y="672" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11">wayland-wm-app-daemon.service</text>
+  <text x="683" y="691" text-anchor="middle" font-size="9" font-style="italic" fill="#475569">optional `app` fast-path daemon</text>
+
+  <rect x="824" y="640" width="250" height="70" rx="12" fill="#f8fafc" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4" filter="url(#ug-shadow)"/>
+  <text x="949" y="664" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11">{app,background,session}-</text>
+  <text x="949" y="680" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,Consolas,monospace" font-size="11">graphical.slice</text>
+  <text x="949" y="698" text-anchor="middle" font-size="9" font-style="italic" fill="#475569">where launched apps live</text>
+
+  <!-- Legend -->
+  <line x1="26" y1="738" x2="72" y2="738" stroke="#4f46e5" stroke-width="2" marker-end="url(#ug-indigo)"/>
+  <text x="82" y="742" font-size="10.5" fill="#0f172a">Requires / BindsTo — hard dependency (must be up)</text>
+
+  <line x1="26" y1="764" x2="72" y2="764" stroke="#4f46e5" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ug-indigo)"/>
+  <text x="82" y="768" font-size="10.5" fill="#0f172a">Wants — soft dependency (started, not required)</text>
+
+  <line x1="26" y1="790" x2="72" y2="790" stroke="#ea580c" stroke-width="2" marker-end="url(#ug-orange)"/>
+  <text x="82" y="794" font-size="10.5" fill="#0f172a">OnSuccess / OnFailure — triggers wayland-session-shutdown.target (teardown cascade)</text>
+
+  <rect x="26" y="810" width="16" height="12" rx="3" fill="#fef3c7" stroke="#d97706"/>
+  <text x="48" y="820" font-size="10.5" fill="#0f172a">the actual compositor process (e.g. Hyprland, sway, niri)</text>
+</svg>
