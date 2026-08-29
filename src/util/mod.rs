@@ -97,8 +97,9 @@ mod tests {
 
     #[test]
     fn read_fg_vt_errors_when_sysfs_absent() {
-        // No /sys/class/tty on macOS dev host (and the file is absent here);
-        // exercises the io-error path. On Linux it parses a real ttyN.
+        // /sys/class/tty doesn't exist off-Linux (and is absent in this test
+        // sandbox either way); exercises the io-error path. On Linux it
+        // parses a real ttyN.
         let r = read_fg_vt();
         if cfg!(target_os = "linux") {
             // value or a parse/Resolve error — just don't panic
