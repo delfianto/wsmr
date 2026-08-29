@@ -1,0 +1,19 @@
+# wayland-sessions entry for wsmr's disposable-user E2E test harness (see
+# docs/fix-plan.md's Phase 7). The Exec/TryExec paths below are a placeholder,
+# substituted by arch/e2e-install.sh with the stable, versioned test path —
+# never edit the installed copy by hand, rerun the install script instead so
+# it stays in sync with the built version.
+#
+# Modeled directly on the real, package-shipped hyprland-uwsm.desktop
+# (/usr/share/wayland-sessions/, from the `uwsm` Arch package): same Exec
+# shape (`<tool> start -e -D Hyprland hyprland.desktop`), same
+# TryExec-guards-the-entry idea — just pointed at the E2E test binary instead
+# of the real /usr/bin/uwsm, and named so it's unmistakable in a display
+# manager's session list.
+[Desktop Entry]
+Name=Hyprland (wsmr E2E)
+Comment=wsmr disposable-user integration test harness — do not select for a daily desktop
+Exec=@WSMR_BIN@ start -e -D Hyprland hyprland.desktop
+TryExec=@WSMR_BIN@
+DesktopNames=Hyprland
+Type=Application
