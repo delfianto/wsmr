@@ -53,6 +53,7 @@ fn start(args: StartArgs) -> WResult<()> {
         bin_path: current_exe()?,
     };
     session::start::run(&comp, &opts)
+        .inspect_err(|e| session::log_error_to_journal(&format!("wsmr: start failed: {e}")))
 }
 
 fn stop(args: StopArgs) -> WResult<()> {
