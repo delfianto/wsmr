@@ -1389,11 +1389,23 @@ repeatable script.
   `sudo test -S /run/user/1002/wayland-1` succeeded.
 - [x] `hyprctl monitors` succeeds and reports the expected backend/output.
   Returned full, real EDID data for 3 physical monitors: `HDMI-A-2`
-  ("Technical Concepts Ltd Beyond TV", 3840x2160@60, focused), `DP-5`
-  ("ViewSonic Corporation VX3276-QHD", 2560x1440@59.95), `DP-6` ("Lenovo
-  Group Limited G34w-30", 3440x1440@59.97) — the latter two are the same
-  two monitors the primary user's own `/etc/hyprland.conf` names by
-  description, confirming this is real hardware detection, not a stub.
+  ("Technical Concepts Ltd Beyond TV", 3840x2160@60), `DP-5` ("ViewSonic
+  Corporation VX3276-QHD", 2560x1440), `DP-6` ("Lenovo Group Limited
+  G34w-30", 3440x1440) — the latter two are the same two monitors the
+  primary user's own `/etc/hyprland.conf` names by description, confirming
+  this is real hardware detection, not a stub. First run left the (real,
+  correctly detected) `HDMI-A-2` focused by Hyprland's own arbitrary
+  first-enumerated-output choice, not a monitor the tester was looking at.
+  Fixed by editing the `wsmr` account's `/etc/skel`-provided Lua config
+  (`config/variables.lua`'s `MONITOR1`/`MONITOR2` plus explicit
+  `hl.monitor()` rules in `config/monitors.lua`, both `desc:`-keyed to the
+  same two monitors and modes/positions `/etc/hyprland.conf` uses) to mirror
+  the primary session's real layout. Re-verified on a second run: `DP-6`
+  (Lenovo) at `3440x1440@165` `0x0`, **focused: yes**; `DP-5` (ViewSonic) at
+  `2560x1440@74.93` `0x-1440`; `HDMI-A-2` auto-positioned at `3440x0`,
+  non-overlapping, not focused — an even stronger form of this check, since
+  the result now matches a specific expected layout, not just "some real
+  monitors were found."
 - [x] Hyprland's PID and cgroup belong to the expected compositor unit.
   `/proc/<MainPID>/cgroup` →
   `0::/user.slice/user-1002.slice/user@1002.service/session.slice/wayland-wm@hyprland.desktop.service`,
@@ -1438,13 +1450,14 @@ repeatable script.
   `XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and `XDG_MENU_PREFIX` all remained
   in the manager environment after stop.
 
-  **Root cause confirmed for `WAYLAND_DISPLAY`/`XDG_CURRENT_DESKTOP`, not
-  a wsmr defect.** `strings /usr/bin/Hyprland` shows Hyprland has this
-  exact pair of shell commands embedded in its own startup/shutdown paths,
-  entirely independent of wsmr:
+  **Root cause confirmed for `WAYLAND_DISPLAY`/`XDG_CURRENT_DESKTOP` — a
+  real bug in Hyprland's own binary, not a wsmr defect, and not sensitive
+  to how the session ends.** `strings -n 20 /usr/bin/Hyprland` shows two
+  complete, literal shell-command strings embedded in the binary, entirely
+  independent of wsmr:
 
   ```sh
-  # on startup:
+  # startup:
   systemctl --user import-environment DISPLAY WAYLAND_DISPLAY \
       HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME \
       PATH XDG_DATA_DIRS \
@@ -1453,28 +1466,38 @@ repeatable script.
          XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME \
          PATH XDG_DATA_DIRS
 
-  # mirror-image unset-environment command also present for shutdown
+  # shutdown:
+  systemctl --user unset-environment DISPLAY WAYLAND_DISPLAY \
+      HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME \
+      PATH XDG_DATA_DIRS \
+    && hash dbus-update-activation-environment 2>/dev/null \
+    && dbus-update-activation-environment --systemd WAYLAND_DISPLAY \
+         XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME \
+         PATH XDG_DATA_DIRS
   ```
 
   So Hyprland exports these itself on start (explaining why they were set
   at all — not via wsmr's `finalize`/`state::append_cleanup` path, which
   never touches `XDG_DATA_DIRS`/`QT_QPA_PLATFORMTHEME` and had no record of
-  this export to clean up), *and* ships a matching unexport call for
-  shutdown. That its own unexport never ran points at *when* it runs, not
-  *whether* it exists: almost certainly wired to Hyprland's own graceful
-  exit dispatcher (e.g. `hyprctl dispatch exit`), not to receiving a bare
-  signal. `wsmr stop` stops `wayland-wm@hyprland.desktop.service` via
-  systemd with no custom `ExecStop=`, so systemd sends the unit's default
-  `KillSignal` (`SIGTERM`) — if Hyprland's unexport hook only fires from
-  its internal exit path, a systemd-initiated `SIGTERM` kills it before
-  that hook ever runs, leaving these two vars stuck. Not independently
-  confirmed with a live SIGTERM-vs-`hyprctl dispatch exit` comparison (would
-  need a fresh session), but strongly supported by the binary's own
-  embedded commands rather than a guess. If accurate, this is squarely
-  Hyprland's own environment-export design not being signal-safe — wsmr has
-  no hook into a wrapped compositor's internal dispatcher, and correctly
-  cleaned up 100% of what it exported through `finalize` itself. Upstream
-  `uwsm` would hit the identical gap for the identical reason.
+  this export to clean up). The shutdown string looks like a matching
+  unexport, but it isn't one: `dbus-update-activation-environment --systemd
+  NAME` given a *bare name* (no `=VALUE`) re-exports that variable's
+  *current value from its own inherited process environment* — and since
+  this command runs as Hyprland's own child, it still has `WAYLAND_DISPLAY`
+  etc. set in its own process memory even after the `unset-environment`
+  call one clause earlier told systemd to forget them. So Hyprland's own
+  shutdown line unsets the vars, then immediately re-exports the exact same
+  values right back, in the same breath — a bug in the command itself, not
+  a timing/signal-handling issue. Confirmed two ways today: `wsmr stop`
+  (systemd-initiated `SIGTERM`, no custom `ExecStop=`) *and* a clean,
+  user-initiated logout from inside the session via Noctalia's own UI
+  (`start-hyprland`'s log explicitly recorded "Hyprland exit cleanly" for
+  that one) both left the identical five vars behind — ruling out the
+  original SIGTERM-vs-graceful-exit theory this replaces. This is squarely
+  Hyprland's own bug, present in the binary regardless of session manager;
+  wsmr correctly cleaned up 100% of what it exported through `finalize`
+  itself, and upstream `uwsm` would hit the exact same bug wrapping the
+  same Hyprland binary.
 
   **`XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX` root cause not
   pinned down.** None of these three appear in the Hyprland import/export
@@ -1586,11 +1609,17 @@ Acceptance criteria:
 - [ ] Logout returns to the display manager with exact environment
   restoration. Not met: no display manager was involved in today's test,
   and environment restoration has the gap described above.
-- [ ] A second login/logout cycle also passes. Not really attempted as a
-  clean pair: the first full attempt (on the VT that turned out to be
-  running `kmscon`) surfaced the seat-conflict finding above and was
-  abandoned mid-session; only the second attempt (on a plain `getty`)
-  completed a full, clean start → verify → stop cycle.
+- [x] A second login/logout cycle also passes. The first full attempt (on
+  the VT that turned out to be running `kmscon`) surfaced the seat-conflict
+  finding above and was abandoned mid-session — not a clean cycle. But two
+  clean cycles followed it on the plain-`getty` VT: a start → P7-03
+  verification → `wsmr stop` cycle, then (after the monitor-config fix
+  above) a second start → verify → **user-initiated logout from inside the
+  session via Noctalia's own UI** cycle — a different exit path than the
+  first, useful in its own right since it's what surfaced that the
+  environment-restoration gap isn't a `wsmr stop`/SIGTERM artifact. Both
+  cycles ended with `graphical-session.target` inactive and zero failed
+  units (`systemctl --user list-units --failed` empty after each).
 - [~] At least one controlled crash scenario recovers cleanly. Not a
   *designed* scenario, but the incidental stale-generation self-heal above
   is real, positive evidence in this direction.
