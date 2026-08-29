@@ -1,0 +1,70 @@
+# Maintainer: (local/dev package — not yet submitted to the AUR)
+#
+# Builds directly from the working tree this file lives in (arch/PKGBUILD,
+# one directory below the crate root) rather than fetching a release
+# tarball — there's no tagged release yet. Run makepkg from inside arch/
+# against your own checkout:
+#
+#   cd arch && makepkg -si
+#
+# This installs a normal /usr/bin/wsmr. It is *not* what the disposable E2E
+# test user needs — that needs a separate, versioned install path that
+# coexists with this one. Use arch/e2e-install.sh for that instead of
+# `pacman -U`ing this package on your daily-driver account. See
+# arch/README.md.
+
+pkgname=wsmr
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Wayland Session Manager in Rust — a systemd-managed standalone Wayland compositor session, ported from uwsm"
+arch=('x86_64')
+url="https://github.com/delfianto/wsmr"
+license=('MIT')
+depends=('systemd' 'dbus')
+makedepends=('cargo')
+options=('!debug')
+source=()
+sha256sums=()
+
+# One directory up: PKGBUILD lives in arch/, the crate root is its parent.
+_srcdir="$startdir/.."
+
+pkgver() {
+	# Keep pkgver honest against Cargo.toml instead of drifting from it.
+	awk -F'"' '/^version/{print $2; exit}' "$_srcdir/Cargo.toml"
+}
+
+prepare() {
+	cd "$_srcdir"
+	cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+	cd "$_srcdir"
+	export RUSTUP_TOOLCHAIN=stable
+	cargo build --frozen --release
+}
+
+check() {
+	# Native (host) tests only — this is the same subset CLAUDE.md documents
+	# as running on macOS; on a real Linux build host it also exercises the
+	# cfg(target_os = "linux") paths (pidfd waitpid, etc). Skip with
+	# `makepkg --nocheck` for a faster iterative build.
+	cd "$_srcdir"
+	export RUSTUP_TOOLCHAIN=stable
+	cargo test --frozen --release
+}
+
+package() {
+	cd "$_srcdir"
+	install -Dm0755 target/release/wsmr "$pkgdir/usr/bin/wsmr"
+	install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+	install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+	install -Dm0644 docs/fix-plan.md "$pkgdir/usr/share/doc/$pkgname/fix-plan.md"
+	install -Dm0644 docs/cli-compatibility.md "$pkgdir/usr/share/doc/$pkgname/cli-compatibility.md"
+	install -Dm0644 docs/coexistence.md "$pkgdir/usr/share/doc/$pkgname/coexistence.md"
+	# See arch/session/hyprland-wsmr.desktop's own header for why this is
+	# Hyprland-specific despite wsmr itself being compositor-agnostic.
+	install -Dm0644 arch/session/hyprland-wsmr.desktop \
+		"$pkgdir/usr/share/wayland-sessions/hyprland-wsmr.desktop"
+}
