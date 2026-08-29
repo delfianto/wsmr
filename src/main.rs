@@ -309,7 +309,7 @@ fn current_exe() -> WResult<String> {
 
 /// Convert `path` to a `String` for embedding in a generated unit file
 /// (`ExecStart=`, etc.), rejecting it outright rather than silently
-/// mangling it if it isn't valid UTF-8 (P5-05). systemd unit files are
+/// mangling it if it isn't valid UTF-8. systemd unit files are
 /// themselves UTF-8 text, so a lossy conversion here wouldn't just be
 /// imprecise — it would write a *different*, likely nonexistent path into
 /// the unit, which then silently fails to exec instead of failing here with

@@ -360,8 +360,8 @@ impl SessionBus {
     /// Wait until the job queue no longer contains `job` (poll), or `timeout`
     /// elapses. Used after `reload`/`stop_unit`. `unit` is only for the
     /// timeout error message (systemd job objects don't carry the unit name
-    /// back). Bounded deliberately (P5-04): neither systemd nor upstream's
-    /// own equivalent wait (`main.py:4394`, itself unbounded) guarantees a
+    /// back). Bounded deliberately: neither systemd nor upstream's own
+    /// equivalent wait (`main.py:4394`, itself unbounded) guarantees a
     /// job is ever removed from the queue — a stuck job must not hang the
     /// caller forever.
     ///
@@ -472,7 +472,7 @@ impl SystemBus {
             Ok(p) => p,
             // Genuinely absent unit → not-active. Anything else (a D-Bus
             // transport/auth failure, say) is a real error and must be
-            // propagated, not silently read as "not active" (P5-05).
+            // propagated, not silently read as "not active".
             Err(e) if is_no_such_unit(&e) => return Ok(None),
             Err(e) => return Err(e.into()),
         };
@@ -504,7 +504,7 @@ impl SystemBus {
 /// Whether `e` is systemd's own "no such unit" application error
 /// (`org.freedesktop.systemd1.NoSuchUnit`), as opposed to a D-Bus transport
 /// or authentication failure that happens to occur on the same call. Only
-/// the former is safe to read as "the unit doesn't exist" (P5-05).
+/// the former is safe to read as "the unit doesn't exist".
 fn is_no_such_unit(e: &zbus::Error) -> bool {
     matches!(e, zbus::Error::MethodError(name, ..) if name.as_str() == "org.freedesktop.systemd1.NoSuchUnit")
 }

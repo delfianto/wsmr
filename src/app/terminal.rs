@@ -416,9 +416,9 @@ mod tests {
     /// Isolating XDG env for terminal-discovery tests: `DATA_DIRS`/
     /// `CONFIG_DIRS` point at `testutil::NO_XDG_DIRS`, *not* `""` — an empty
     /// string is treated as unset and falls back to the host's real
-    /// `/usr/share`, which is exactly what made these tests host-dependent
-    /// (see `fix-plan.md` P3-01: a real terminal on `/usr/share/applications`
-    /// would otherwise be discovered and break the "no terminal" cases).
+    /// `/usr/share`, which is exactly what made these tests host-dependent:
+    /// a real terminal on `/usr/share/applications` would otherwise be
+    /// discovered and break the "no terminal" cases.
     fn isolated_term_env<'a>(
         root: &'a Path,
         cfg: &'a Path,

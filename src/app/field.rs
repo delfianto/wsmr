@@ -306,9 +306,9 @@ mod tests {
         assert_eq!(expand_str("a\\rb"), "a\rb");
         assert_eq!(expand_str("a\\\\b"), "a\\b");
         assert_eq!(expand_str("plain"), "plain");
-        // P5-03: an unknown escape drops the backslash and keeps the char,
-        // matching upstream's `.get(char, char)` fallback exactly (not an
-        // error, and not a literal `\x` passthrough).
+        // An unknown escape drops the backslash and keeps the char, matching
+        // upstream's `.get(char, char)` fallback exactly (not an error, and
+        // not a literal `\x` passthrough).
         assert_eq!(expand_str("a\\xb"), "axb");
         // a trailing lone backslash has nothing to escape — dropped silently
         assert_eq!(expand_str("a\\"), "a");
@@ -326,7 +326,7 @@ mod tests {
         assert!(tokenize_exec(r#""a $x""#).is_err()); // unescaped $ in quotes
     }
 
-    /// P5-03: every reserved character from the spec's unquoted-char set,
+    /// Every reserved character from the spec's unquoted-char set,
     /// cross-checked against upstream's exact set (`main.py:386`:
     /// `"\t\n'\\><~|&;$*?#()`"`) — must be rejected unquoted, accepted quoted.
     /// `\t`/`\n` are excluded from the unquoted-reject half: both tokenizers
@@ -424,9 +424,9 @@ mod tests {
     }
 
     /// Table-tested against Python's actual
-    /// `f"file://{urllib.parse.quote(arg)}"` / `urlparse(arg).scheme` output
-    /// (P5-01) — every row here was cross-checked against a real `python3`
-    /// invocation, not derived from the Rust implementation.
+    /// `f"file://{urllib.parse.quote(arg)}"` / `urlparse(arg).scheme` output —
+    /// every row here was cross-checked against a real `python3` invocation,
+    /// not derived from the Rust implementation.
     #[test]
     fn path2url_table() {
         let cases: &[(&str, &str)] = &[

@@ -10,11 +10,11 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 /// treat `""` as *unset* (by design — see `util::xdg`'s own tests) and fall
 /// back to `/usr/share`+co, so a test that sets these to `""` silently pulls
 /// in the host's real desktop entries instead of excluding them (this is
-/// exactly what made `app::terminal`'s tests host-dependent — see
-/// `fix-plan.md` P3-01). A nonexistent absolute path is a real, non-empty
-/// value, so it's honored as "search here" — and every reader in this crate
-/// already treats a missing directory as simply empty, so nothing needs to
-/// exist on disk at this path.
+/// exactly what made `app::terminal`'s tests host-dependent). A nonexistent
+/// absolute path is a real, non-empty value, so it's honored as "search
+/// here" — and every reader in this crate already treats a missing
+/// directory as simply empty, so nothing needs to exist on disk at this
+/// path.
 pub const NO_XDG_DIRS: &str = "/nonexistent-wsmr-test-xdg-dirs";
 
 /// Process-wide lock serializing tests that mutate `std::env`. `set_var` /

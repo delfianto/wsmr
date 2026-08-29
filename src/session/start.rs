@@ -53,10 +53,10 @@ pub struct StartOpts {
 
 /// Run the start flow for `comp`.
 ///
-/// Ordering is safety-critical (P0-01/P0-02): every read-only eligibility
-/// check — the system-target gate, the double-start refusal, and computing
-/// the generation plan — runs to completion *before* anything on disk or in
-/// the systemd user manager is touched. A refusal (already active, or a plan
+/// Ordering is safety-critical: every read-only eligibility check — the
+/// system-target gate, the double-start refusal, and computing the
+/// generation plan — runs to completion *before* anything on disk or in the
+/// systemd user manager is touched. A refusal (already active, or a plan
 /// conflict) or `--dry-run` therefore never generates, writes, or reloads.
 pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
     // (1) optional system graphical.target gate (read-only). Skipped for
@@ -139,7 +139,7 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
     // message past systemd-cat (which captures fd 1/2 into the journal). A
     // failure means the *messaging* path breaks, not the session itself, but
     // it must still be reported rather than silently exec-ing into a signal
-    // handler that can't talk to the user (P5-05).
+    // handler that can't talk to the user.
     unsafe {
         if libc::dup2(1, 3) < 0 {
             return Err(Error::io("dup2(1, 3)", std::io::Error::last_os_error()));

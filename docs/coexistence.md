@@ -1,4 +1,4 @@
-# Coexistence with uwsm (P0-05)
+# Coexistence with uwsm
 
 wsmr is a Rust port of uwsm and, by design, uses the **same systemd user-unit
 names** as uwsm: `wayland-wm@.service`, `wayland-wm-env@.service`, the

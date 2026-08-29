@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 /// How long `stop_wm` waits for the compositor's stop job to clear before
-/// giving up (P5-04). Generously above `wayland-wm@.service`'s own
+/// giving up. Generously above `wayland-wm@.service`'s own
 /// `TimeoutStopSec=10`, since the wait covers the whole cascading session
 /// teardown, not just that one unit.
 const STOP_JOB_TIMEOUT: Duration = Duration::from_secs(20);
@@ -103,8 +103,8 @@ fn parse_marks(raw: &str) -> Option<Vec<String>> {
 
 /// Run the `stop` command.
 ///
-/// `--dry-run --remove` is strictly read-only (P0-02): the removal plan is
-/// computed and reported without deleting anything or reloading the manager.
+/// `--dry-run --remove` is strictly read-only: the removal plan is computed
+/// and reported without deleting anything or reloading the manager.
 pub fn run_stop(opts: &StopOpts) -> Result<()> {
     let bus = SessionBus::connect()?;
     if !stop_wm(&bus, opts.dry_run)? {

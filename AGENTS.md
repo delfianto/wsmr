@@ -15,15 +15,15 @@ no `uwsm/` sibling checkout in this repository — when a real uwsm install is
 available (e.g. `/usr/share/uwsm/modules/uwsm/main.py` on an Arch/CachyOS box
 with the `uwsm` package installed), read its actual source directly rather
 than relying on memory; several real bugs in this port were only found that
-way (see `fix-plan.md` Phases 2 and 5). Otherwise,
+way. Otherwise,
 [`docs/uwsm-core-analysis.md`](docs/uwsm-core-analysis.md) is the porting
 reference distilled from that source.
 
 **Status:** past scaffolding — a substantial, working, unit-tested port
 (session bootstrap, environment-delta lifecycle, app launching, CLI surface).
-`fix-plan.md` is the live, authoritative tracker of exactly what's verified
-vs. still open; don't infer status from this paragraph, which will drift —
-check that file.
+`docs/fix-plan.md` is the live, authoritative tracker of exactly what's
+verified vs. still open; don't infer status from this paragraph, which will
+drift — check that file.
 
 ## ⚠️ Critical constraint: macOS dev host, Linux-only target
 
@@ -39,10 +39,11 @@ Consequences:
   was verified unless it ran on Linux.
 - **Linux build/test runs in Podman** (see below). Tier A (build + unit tests
   on Linux) and Tier B (systemd-as-PID-1 integration tests) both exist and
-  run; Tier B currently ignores some real failures via `|| true` and can
-  report a false success (`fix-plan.md` Phase 4 — not yet done) — a green
-  Tier B run today is not full functional coverage. Neither tier runs in CI
-  yet; CI (`.github/workflows/ci.yml`) runs format-check, lint, build, and
+  run; Tier B's smoke test asserts the full happy-path session lifecycle as
+  hard, unignored checks, so a green run reflects a real pass — it doesn't
+  yet cover every failure/recovery scenario worth testing (see
+  `docs/fix-plan.md` for exactly which ones). Neither tier runs in CI yet; CI
+  (`.github/workflows/ci.yml`) runs format-check, lint, build, and
   `cargo test` (roughly `just full-gate` plus an explicit build step), plus
   a separate MSRV job pinned to `Cargo.toml`'s `rust-version`.
 
@@ -162,8 +163,7 @@ CLI surface to reproduce (from `main.py` argparse):
 - desktop entries / XDG: **hand-rolled**, not `freedesktop-desktop-entry` or
   `xdg` (`src/app/entry.rs`, `src/app/field.rs`, `src/util/xdg.rs`) — kept
   deliberately minimal to the subset wsmr needs, cross-checked against
-  `python-pyxdg`'s real behavior where it matters (locale handling; see
-  `fix-plan.md` Phase 5).
+  `python-pyxdg`'s real behavior where it matters (locale handling).
 
 ## Rust skills available (installed globally)
 

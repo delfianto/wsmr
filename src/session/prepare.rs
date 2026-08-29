@@ -116,7 +116,7 @@ fn deduce_session(env_login: &mut BTreeMap<String, String>) -> Result<()> {
 /// Resolve `(XDG_SESSION_ID, XDG_SEAT)` for `vt` via `lookup` and (re)write
 /// `env_session.conf`. Split out from [`deduce_session`] so this branching
 /// logic — found / absent / a transport failure — is unit-testable against a
-/// fake [`SessionLookup`] instead of the real system bus (P3-02).
+/// fake [`SessionLookup`] instead of the real system bus.
 fn deduce_session_with(
     env_login: &mut BTreeMap<String, String>,
     vt: u32,
