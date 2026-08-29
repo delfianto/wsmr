@@ -199,9 +199,8 @@ startup on the next login, by their own account — not a clean win).
 
 ## Hyprland leaves five environment variables behind on its own
 
-**Root-caused for two of the five. Confirmed present under both wsmr and
-real uwsm, and independent of how the session ends — a real bug in the
-Hyprland binary itself, not a wsmr defect.**
+**Root-caused, confirmed present under both wsmr and real uwsm — and now
+confirmed fixed by a one-line environment variable, verified live.**
 
 After a clean `wsmr stop`, most session-scoped variables were correctly
 restored (`systemctl --user show-environment` diffed pre/post: all `LC_*`
@@ -254,23 +253,16 @@ from inside the session via Noctalia's own shell UI) and getting the
 identical five leftover variables both times, which rules out the original
 theory that this was a SIGTERM-vs-graceful-exit artifact.
 
-`XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and `XDG_MENU_PREFIX` are not
-explained by this specific mechanism (none appear in either embedded
-command), though `XDG_MENU_PREFIX=hyprland-` still looks Hyprland-authored
-via some other path not yet found. It's also possible one or more of these
-three predates `wsmr start` entirely (e.g. set by PAM for a `tty`-class
-login) — no true pre-`start` baseline was captured on this particular real-
-hardware run to rule that in or out, unlike the Tier-B integration smoke
-test, which does capture one and shows full, clean restoration for the
-stub-compositor case it actually exercises.
+At the time this was first found, `XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and
+`XDG_MENU_PREFIX` weren't explained by this mechanism (none of the three
+appear in either embedded command) — see below for how that was resolved.
 
 **This is squarely Hyprland's own bug, present in the binary regardless of
 session manager** — upstream `uwsm` wraps the exact same binary and would
 hit the exact same re-export bug. wsmr correctly cleaned up 100% of what it
 itself exported through `finalize`.
 
-**Confirmed upstream, and a real mitigation already exists.**
-[hyprwm/Hyprland#7083](https://github.com/hyprwm/Hyprland/issues/7083)
+**Confirmed upstream.** [hyprwm/Hyprland#7083](https://github.com/hyprwm/Hyprland/issues/7083)
 ("Option to disable activation environment management", August 2024) —
 raised by `uwsm`'s own author, Vladimir-csp — got exactly this root cause
 confirmed by the PR that closed it,
@@ -285,14 +277,44 @@ environment before Hyprland starts, it skips Hyprland's own
 `systemctl`/`dbus-update-activation-environment` calls entirely — both the
 startup import *and* the shutdown unset/re-export — delegating the whole
 lifecycle to whatever session manager is running it. This has shipped
-since well before the `0.56.2-1` tested here. **Not yet tried against a
-real wsmr session** — since wsmr's own `finalize`/`cleanup-env` already
-handles the complete set/unset lifecycle independently, exporting
-`HYPRLAND_NO_SD_VARS=1` ahead of `aux exec` should eliminate this entire
-finding outright, and is worth verifying in a follow-up pass rather than
-just asserting. Upstream `uwsm` does not currently set it either (checked
-against its current source), so a real uwsm session hits this identically
-today.
+since well before the `0.56.2-1` tested here.
+
+**Verified live, on the same disposable `wsmr` account: this fully fixes
+the finding.** `systemctl --user set-environment HYPRLAND_NO_SD_VARS=1`
+was pushed into the account's activation environment ahead of a fresh
+`wsmr start`, confirmed present in Hyprland's own process environment
+(`/proc/<pid>/environ`), and the cycle was run twice — once from the
+account's pre-existing (stale) environment, once from a baseline
+explicitly cleared first to remove any ambiguity. From the clean baseline,
+all five variables were freshly (re-)set at session start as expected, and
+**`wsmr stop` removed all five** — `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP`,
+`XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and `XDG_MENU_PREFIX` — leaving only
+the test variable itself behind. No failed units either.
+
+This also resolves the three previously-unexplained variables: with
+Hyprland's own broken import path disabled, `XDG_CURRENT_DESKTOP`,
+`XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and `XDG_MENU_PREFIX` still all got
+set at startup anyway — meaning they come from **wsmr's own** `-D Hyprland`
+desktop-name handling in `prepare-env`, not from Hyprland's binary and not
+from PAM as originally speculated. wsmr was cleaning these up correctly
+all along; the original test's "not restored" reading for
+`XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX` was in hindsight
+most likely stale residue from an earlier session contaminating that run's
+starting point (exactly the "no true pre-start baseline" caveat flagged at
+the time) — this pass hit that same contamination on its first cycle,
+which is what motivated re-running it from a verified-clean baseline.
+
+Upstream `uwsm` does not currently set `HYPRLAND_NO_SD_VARS` either
+(checked against its current source), so a real uwsm session still hits
+the original bug today; this is a wsmr/user-side mitigation, not something
+that changed upstream.
+
+**Not yet done: wiring this into wsmr itself.** This was tested by hand via
+`systemctl --user set-environment`, not by wsmr automatically exporting it
+for Hyprland. Whether wsmr should set `HYPRLAND_NO_SD_VARS=1` by default
+when the resolved compositor is Hyprland (or expose it as a flag) is an
+open design question, not yet decided or implemented — see
+[`docs/fix-plan.md`](fix-plan.md).
 
 One more thing worth watching rather than acting on yet:
 [hyprwm/Hyprland#15776](https://github.com/hyprwm/Hyprland/pull/15776)
