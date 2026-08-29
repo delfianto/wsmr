@@ -1582,9 +1582,31 @@ first attempt). Root cause is most likely on kmscon's side, or in the
 kmscon↔Hyprland/aquamarine handoff specifically — not in wsmr's own hand-off
 code, which was verified to send the correct signal. Not deep-dived further
 given the practical workaround; worth tracking as a known interop gap for
-anyone repeating this test on a similarly kmscon-defaulted system. Upstream
-`uwsm` would very likely hit the identical conflict here, since the
-non-cooperating side (kmscon) isn't wsmr- or uwsm-specific.
+anyone repeating this test on a similarly kmscon-defaulted system.
+
+**Cross-validated against real `uwsm` — confirmed, not just predicted.**
+First checked structurally: uwsm's real Python (`main.py:4863-4884`) uses
+the exact same `os.dup2(1, 3)`/`os.dup2(2, 4)` + `systemd-cat`-wrapped
+`signal-handler.sh` invocation wsmr's Rust port uses, and
+`diff /usr/lib/uwsm/signal-handler.sh
+libexec/signal-handler.sh` is empty except for the added attribution
+comment — the script wsmr ported is byte-identical to upstream's. Then
+confirmed live: ran `./session.sh uwsm` (the same account/compositor
+config) on a kmscon-hosted VT. Hyprland crashed outright at startup —
+`terminate called after throwing an instance of 'std::runtime_error'`,
+`what(): CBackend::create() failed!`, a real SIGABRT with a core dump
+(`systemd-coredump`), `wayland-wm@hyprland.desktop.service: Failed with
+result 'protocol'`. `CBackend::create()` is Hyprland's DRM/KMS backend
+initializer — consistent with kmscon still holding those resources when
+Hyprland tried to grab them, same underlying conflict as the wsmr run, just
+a *harder* failure this time (outright crash vs. degraded-but-running
+input) rather than the identical symptom. That difference in severity
+between the two runs is itself consistent with this being a genuine race
+(exactly when kmscon releases resources relative to when the new
+compositor grabs them varies), not a deterministic, reproducible-every-time
+bug. Combined with the structural identity confirmed above, this settles
+it: **`uwsm` has the identical kmscon problem `wsmr` does — it is not a
+wsmr-specific issue.**
 
 **New finding: several third-party apps/portals fail (not just warn) when
 the compositor disappears during teardown — not a wsmr defect.** Found by
