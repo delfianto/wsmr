@@ -197,6 +197,57 @@ for them to go fully inactive *before* calling `hyprctl dispatch exit`,
 sidestepping the teardown race entirely (at the cost of slower GTK-portal
 startup on the next login, by their own account — not a clean win).
 
+### A plausible mitigation — tried, but not verified
+
+The community workaround above translates into a systemd-native
+equivalent that fits wsmr's own coexistence model (a drop-in on wsmr's
+generated unit, the same way [`docs/architecture.md`](architecture.md)
+already tolerates and expects foreign drop-ins to coexist with its
+generated units): an `ExecStop=` override on
+`wayland-wm@hyprland.desktop.service` that explicitly stops all three
+portal services — and, since `ExecStop=` runs to completion before the
+unit's main process is signaled, blocks until they're confirmed inactive
+— before Hyprland itself is asked to stop:
+
+```ini
+# ~/.config/systemd/user/wayland-wm@hyprland.desktop.service.d/xdph-teardown-order.conf
+[Service]
+ExecStop=-/usr/bin/systemctl --user stop xdg-desktop-portal-hyprland.service xdg-desktop-portal-gtk.service xdg-desktop-portal.service
+```
+
+This was installed on the disposable `wsmr` account and exercised twice:
+once via `wsmr stop`, once via `hyprctl dispatch 'hl.dsp.exit()'` — the
+actual reproduction path from the upstream report, and (confirmed by
+checking) exactly what this system's default `SUPER+M` keybind falls back
+to, since `hyprshutdown` isn't installed here. Neither cycle crashed.
+
+**That is not the same as confirming the fix works, and it isn't being
+claimed as such.** In both cycles, the portal services were already fully
+stopped *before* Hyprland's own process finished exiting — which is
+exactly the ordering the fix is meant to produce, but it happened even
+though the `ExecStop=` override likely never got the chance to do
+anything (the portals were already inactive by the time `wayland-wm@`'s
+own stop began). One candidate explanation was ruled out directly: the
+compositor's `start-hyprland` wrapper (`pacman -Qo` confirms it ships in
+the `hyprland` `0.56.2-1` package itself, not a distro add-on) is a
+plain exit-monitor/auto-restart supervisor — `strings` on the binary
+shows no `systemctl` invocation anywhere in it, and its own "exit
+detected" log line lands *after* the portal had already stopped in both
+tests, so it isn't the trigger. The actual mechanism producing the early
+stop wasn't pinned down (most likely something internal to Hyprland's own
+compiled exit-dispatcher path, not inspectable without decompiling it).
+
+Given that, plus this bug's already-confirmed intermittency (two clean
+cycles happened before the original crash was ever found, on this same
+machine), two more clean cycles here — regardless of cause — isn't strong
+evidence the drop-in changes anything. It may be a genuinely inert no-op
+in this environment. The drop-in is harmless either way (it only runs
+`systemctl --user stop` on units that would be stopped anyway) and is
+left in place on the test account as a low-cost hedge, but this should be
+read as **an untested idea worth trying, not a verified fix** — unlike
+the `HYPRLAND_NO_SD_VARS` mitigation above, which was confirmed
+structurally, not just by absence of a crash in a couple of runs.
+
 ## Hyprland leaves five environment variables behind on its own
 
 **Root-caused, confirmed present under both wsmr and real uwsm — and now
