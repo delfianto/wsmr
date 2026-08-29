@@ -1591,35 +1591,55 @@ the compositor disappears during teardown — not a wsmr defect.** Found by
 `scripts/e2e-harness.sh post-logout` on its first real run, catching exactly
 what it was built to catch. After a normal `wsmr stop`-free, in-session
 logout, `systemctl --user list-units --failed` showed **4** units in a
-genuine `failed` state, none of them wsmr's own:
+genuine `failed` state, none of them wsmr's own. None of wsmr's own
+generated units were among the failures (confirmed via the same
+`list-units --failed` output) — this is squarely third-party app/portal
+robustness, not something wsmr causes or can prevent (it correctly stops
+the graph; what individual apps do when their Wayland socket closes is out
+of its control).
 
-- `xdg-desktop-portal-hyprland.service` — SIGSEGV'd once trying to
-  reconnect to the (by then gone) Wayland server, then systemd's automatic
-  restart attempts crash-looped 6 times in ~1 second and hit
-  `StartLimitBurst` (`Result=start-limit-hit`, `NRestarts=6`).
-- `xdg-desktop-portal-gtk.service` — also ended up `failed` (not
-  individually root-caused, but the pattern — a portal implementation that
-  needs a live Wayland connection — matches the Hyprland one).
-- `app-blueman@autostart.service` and
-  `app-cachyos-hello@autostart.service` — both exited with
+- `xdg-desktop-portal-hyprland.service` (version `1.4.1-1.1`) —
+  **root-caused precisely, down to the microsecond, via
+  `journalctl -o short-monotonic`**: at `[63691.302669]` it's still
+  processing a new Wayland registry interface
+  (`ext_foreign_toplevel_image_capture`) — arriving because Hyprland is
+  mid-teardown of its own globals — and **130 microseconds later**, at
+  `[63691.302801]`, `Main process exited, code=dumped, status=11/SEGV`. A
+  genuine SIGSEGV in the portal's own Wayland event-handling code,
+  triggered by a registry event landing during compositor shutdown — not a
+  race with `PartOf=graphical-session.target`'s stop-propagation as first
+  suspected. Confirmed by the rest of the timeline: `Restart=on-failure`
+  (the only one of the four units with this directive) then spawned 5 more
+  attempts in the next ~1.2s, every one immediately hitting `[CRITICAL]
+  Couldn't connect to a wayland compositor` and exiting 1 (the socket was
+  fully gone by then), until `StartLimitBurst` capped it
+  (`Result=start-limit-hit`, `NRestarts=6`) — and Hyprland's own "exit
+  cleanly" log line lands *after* all of that, at `[63692.902580]`, ~200ms
+  later. So this isn't a scheduling race to work around; it's a real crash
+  bug in how this portal version handles one specific Wayland event during
+  compositor teardown.
+- `xdg-desktop-portal-gtk.service` — also ended up `failed`, but has no
+  `Restart=` directive at all (defaults to none), so it can't loop the way
+  the Hyprland portal did — a single failed exit, not individually
+  root-caused, but consistent with a similar "doesn't like the compositor
+  disappearing" issue in a different portal implementation.
+- `app-blueman@autostart.service` and `app-cachyos-hello@autostart.service`
+  — both have `Restart=no` explicitly (from
+  `systemd-xdg-autostart-generator`'s output) and both exited with
   `Result=exit-code`, `ExecMainStatus=1`: a real nonzero exit, not a
   raw-signal kill, when `app-graphical.slice`'s `PartOf=` propagation tore
-  them down along with the session.
+  them down along with the session. A different, simpler mechanism than the
+  portal crash — these two just don't distinguish "asked to shut down" from
+  "something went wrong" and exit(1) either way.
 
-None of wsmr's own generated units were among the failures (confirmed via
-the same `list-units --failed` output). This looks like a genuine class of
-robustness gap in several unrelated third-party apps that don't defensively
-handle their Wayland connection disappearing mid-teardown — not something
-wsmr causes or can prevent (it correctly stops the graph; what individual
-apps do when their socket closes is out of its control), but a real
-characteristic of ending a session on this system worth knowing about.
 **Notably intermittent**: the two earlier clean cycles today (both checked
 for failed units) did not hit this — same account, same compositor, same
-general teardown path, no failed units either time. Whether that's timing
-(a race in how fast the portal tries to reconnect vs. how fully the
-Wayland socket has torn down) or something specific to what was running in
-that particular session (the `wsmr app` test fixture, a longer-lived
-session before logout) wasn't isolated further.
+general teardown path, no failed units either time. Given the root cause is
+now known precisely for the portal (a specific Wayland event landing at a
+specific moment during teardown), intermittency is plausible as ordinary
+scheduling jitter in exactly when that registry event fires relative to how
+far along Hyprland's own teardown is — not something wsmr's own generation
+or lifecycle logic has any influence over.
 
 ### P7-04 Exercise live failure recovery
 
