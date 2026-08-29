@@ -58,14 +58,17 @@ verification command or evidence in the phase's evidence section.
   before claiming CachyOS/Wayland/Hyprland runtime support. **Substantial
   partial evidence as of 2026-08-29** (see Phase 7 evidence): a real
   wsmr-managed Hyprland session was reached and verified against most of
-  P7-03's checklist under the disposable `wsmr` account — real compositor
-  cgroup/unit match, live `hyprctl monitors` output against real monitors,
-  a successful `wsmr app` launch. Not closed: no display-manager-mediated
+  P7-03's checklist under the disposable `wsmr` account, both by hand and
+  (now) via the real `scripts/e2e-harness.sh` P7-02 harness — real
+  compositor cgroup/unit match, live `hyprctl monitors` output against real,
+  correctly laid-out monitors, a successful `wsmr app` launch, 16/16 checks
+  passing on a live `verify` run. Not closed: no display-manager-mediated
   login was tested (this system's greeter turned out to be `greetd` +
-  `noctalia-greeter`, not SDDM as originally assumed), the P7-02 harness
-  script still doesn't exist, and a real environment-restoration gap was
-  found that Tier B's stub-compositor test never exercised (see Phase 7
-  evidence for both).
+  `noctalia-greeter`, not SDDM as originally assumed), P7-04's failure
+  scenarios are still mostly unwritten, and two real findings outside
+  wsmr's own control were found and root-caused — a Hyprland environment-
+  restoration bug and an intermittent third-party app/portal crash-on-
+  teardown issue (see Phase 7 evidence for both).
 
 ## Current baseline
 
@@ -1379,9 +1382,25 @@ repeatable script.
 
 ### P7-02 Build the three-stage live harness
 
-- [ ] Not implemented. Every check below was run by hand, interactively,
-  against a live session — not via a repeatable `prepare`/`verify`/
-  `post-logout` script. Real, but not rerunnable evidence.
+- [x] `scripts/e2e-harness.sh {prepare|verify|post-logout} [--user NAME]`.
+  Everything below this point was first proven by hand, interactively
+  (recorded honestly as such at the time); this script encodes those same
+  checks as a real, rerunnable command with a real exit code, run as root
+  from outside the disposable account (reaches its systemd --user
+  manager/D-Bus bus via `sudo -u`, so it works even without a usable
+  graphical session — relevant given the kmscon input-conflict finding
+  below, which at one point made that impossible). `prepare` sanity-checks
+  the account and snapshots a pre-login environment baseline + package
+  versions to `/tmp/wsmr-e2e-harness/<user>/`; `verify` runs the P7-03
+  checklist as independent, soft-fail assertions with a pass/fail count
+  (own test app fixture cleaned up automatically); `post-logout` diffs the
+  current environment against the saved baseline (with the confirmed
+  Hyprland-bug variables from below allowlisted by name, so a *real* new
+  regression isn't lost in already-understood noise), and checks for failed
+  units and stale runtime state. All three stages run for real, in order,
+  against a live session, on 2026-08-29: `prepare` (all checks passed),
+  `verify` (16/16 checks passed), `post-logout` (3/4 — correctly caught the
+  crash-loop finding below as a real failure, not a false negative).
 
 ### P7-03 Verify real-session behavior
 
@@ -1520,10 +1539,13 @@ repeatable script.
   not the same test. Net effect either way: "exact environment restoration"
   is not actually true here today, for reasons outside wsmr's own generation
   and cleanup logic as far as investigated so far.
-- [x] No failed units, stale state, temporary files, or owned unit files
-  remain. `systemctl --user list-units --failed` returned empty after stop.
-  (Did not separately re-verify no stale temp/manifest files on disk this
-  run — not re-checked live; only the failed-units check was repeated.)
+- [~] No failed units, stale state, temporary files, or owned unit files
+  remain. `systemctl --user list-units --failed` returned empty after the
+  first two clean stop/logout cycles, and stale-runtime-state was
+  separately clean on a later run (`scripts/e2e-harness.sh post-logout`).
+  **But not reliably true**: a later run (still today) left 4 units in a
+  genuine `failed` state after a normal logout — see the new finding below.
+  wsmr's own units were not among them.
 - [x] Collect the user journal and test artifacts for review. Done
   throughout via live `journalctl`/`hyprland.log` inspection (see the
   kmscon finding below for how `hyprland.log` was reached — Hyprland
@@ -1563,6 +1585,41 @@ given the practical workaround; worth tracking as a known interop gap for
 anyone repeating this test on a similarly kmscon-defaulted system. Upstream
 `uwsm` would very likely hit the identical conflict here, since the
 non-cooperating side (kmscon) isn't wsmr- or uwsm-specific.
+
+**New finding: several third-party apps/portals fail (not just warn) when
+the compositor disappears during teardown — not a wsmr defect.** Found by
+`scripts/e2e-harness.sh post-logout` on its first real run, catching exactly
+what it was built to catch. After a normal `wsmr stop`-free, in-session
+logout, `systemctl --user list-units --failed` showed **4** units in a
+genuine `failed` state, none of them wsmr's own:
+
+- `xdg-desktop-portal-hyprland.service` — SIGSEGV'd once trying to
+  reconnect to the (by then gone) Wayland server, then systemd's automatic
+  restart attempts crash-looped 6 times in ~1 second and hit
+  `StartLimitBurst` (`Result=start-limit-hit`, `NRestarts=6`).
+- `xdg-desktop-portal-gtk.service` — also ended up `failed` (not
+  individually root-caused, but the pattern — a portal implementation that
+  needs a live Wayland connection — matches the Hyprland one).
+- `app-blueman@autostart.service` and
+  `app-cachyos-hello@autostart.service` — both exited with
+  `Result=exit-code`, `ExecMainStatus=1`: a real nonzero exit, not a
+  raw-signal kill, when `app-graphical.slice`'s `PartOf=` propagation tore
+  them down along with the session.
+
+None of wsmr's own generated units were among the failures (confirmed via
+the same `list-units --failed` output). This looks like a genuine class of
+robustness gap in several unrelated third-party apps that don't defensively
+handle their Wayland connection disappearing mid-teardown — not something
+wsmr causes or can prevent (it correctly stops the graph; what individual
+apps do when their socket closes is out of its control), but a real
+characteristic of ending a session on this system worth knowing about.
+**Notably intermittent**: the two earlier clean cycles today (both checked
+for failed units) did not hit this — same account, same compositor, same
+general teardown path, no failed units either time. Whether that's timing
+(a race in how fast the portal tries to reconnect vs. how fully the
+Wayland socket has torn down) or something specific to what was running in
+that particular session (the `wsmr app` test fixture, a longer-lived
+session before logout) wasn't isolated further.
 
 ### P7-04 Exercise live failure recovery
 
@@ -1629,12 +1686,15 @@ Phase 7 evidence:
 - [x] Test date and versions: 2026-08-29; systemd 261.2-1, dbus 1.16.2-1.1,
   hyprland 0.56.2-1, wsmr 0.1.0-1 (`pacman -Qi wsmr`), kernel
   7.2.2-1-cachyos.
-- [!] Harness invocation: no P7-02 script exists yet. Every check above was
-  run manually and interactively (`sudo -u wsmr env ... systemctl --user
-  ...` / `hyprctl` / direct journal and `hyprland.log` inspection via
-  `sudo`), not via a repeatable harness.
+- [x] Harness invocation: `scripts/e2e-harness.sh {prepare|verify|post-logout}
+  --user wsmr`. The earlier checks in this evidence section were run
+  manually and interactively before the script existed (kept as-is, marked
+  as such at the time); the script now exists, was run for real for all
+  three stages against a live session, and is what caught the
+  third-party-app-failure finding above on its very first run.
 - [x] Assertion report: see P7-03 above — 8/11 clean, 1 deferred, 1
-  substituted, 1 found genuinely incomplete.
+  substituted, 1 found genuinely incomplete, 1 found genuinely intermittent
+  (the third-party failed-units finding).
 - [x] Journal/artifact location: ephemeral. `journalctl` and
   `/run/user/1002/hypr/*/hyprland.log` were inspected live during this
   session; nothing was copied to a persisted location in the repo.
