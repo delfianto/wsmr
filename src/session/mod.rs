@@ -29,6 +29,34 @@ pub fn notify_error(summary: &str, body: &str) {
     }
 }
 
+/// Best-effort: write `msg` to the journal under the `wsmr` identifier at
+/// `err` priority, via a throwaway `systemd-cat` invocation.
+///
+/// `start()`'s pre-exec steps (system-target gate, double-start refusal,
+/// unit-generation plan, bindpid start, login-env snapshot) run before its
+/// own `systemd-cat`-wrapped hand-off to the signal handler, so an error
+/// there only ever reaches plain stderr. A greetd-launched session has no
+/// journal-captured stderr, so such a failure was otherwise completely
+/// silent — the session just closes and greetd falls back to the greeter,
+/// with no trace anywhere. Failures to log are ignored: this is a
+/// best-effort diagnostic aid, not part of the session's correctness.
+pub fn log_error_to_journal(msg: &str) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let Ok(mut child) = Command::new("systemd-cat")
+        .args(["--identifier=wsmr", "--priority=err"])
+        .stdin(Stdio::piped())
+        .spawn()
+    else {
+        return;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = writeln!(stdin, "{msg}");
+    }
+    let _ = child.wait();
+}
+
 /// Program name used for runtime paths and identifiers.
 pub const BIN_NAME: &str = "wsmr";
 
