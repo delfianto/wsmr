@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Build + test wsmr inside a Linux Podman container (we develop on macOS).
+# Build + test wsmr inside a clean Debian Podman container — a reproducible
+# environment independent of whatever's installed on the dev host, not a
+# workaround for lacking one (development is Linux-only; a plain `cargo test`
+# on the host already covers the same paths).
 #
-# Source is live bind-mounted; the cargo registry and the Linux target dir live
-# in named volumes so iteration is fast and the Linux build never collides with
-# the host's macOS target/.
+# Source is live bind-mounted; the cargo registry and the container's own
+# target dir live in named volumes, kept separate from the host's `target/`
+# so iteration here never collides with a concurrent host-side build.
 #
 # Usage:
 #   scripts/linux-test.sh                 # cargo test (all)

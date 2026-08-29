@@ -1,9 +1,10 @@
-# Linux build/test environment for wsmr.
-#
-# wsmr is developed on macOS but runs on Linux only. Its dependencies are
-# pure Rust (zbus, nix, libc) — there is NO libdbus/libsystemd linking, so this
-# image only needs the Rust toolchain plus a C linker (gcc). systemd and D-Bus
-# at *runtime* belong in the Tier-B "systemd as PID 1" image, not here.
+# Reproducible Linux build/test environment for wsmr — a clean, pinned Debian
+# image independent of the dev host's own toolchain, not a way to reach Linux
+# in the first place (wsmr is developed and run on Linux only). Its
+# dependencies are pure Rust (zbus, nix, libc) — there is NO libdbus/libsystemd
+# linking, so this image only needs the Rust toolchain plus a C linker (gcc).
+# systemd and D-Bus at *runtime* belong in the Tier-B "systemd as PID 1" image,
+# not here.
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

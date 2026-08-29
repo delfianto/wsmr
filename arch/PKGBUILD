@@ -46,9 +46,9 @@ build() {
 }
 
 check() {
-	# Native (host) tests only — this is the same subset CLAUDE.md documents
-	# as running on macOS; on a real Linux build host it also exercises the
-	# cfg(target_os = "linux") paths (pidfd waitpid, etc). Skip with
+	# Native (host) tests only — the same `cargo test` AGENTS.md documents as
+	# the primary loop, which on this real Linux build host also exercises
+	# the cfg(target_os = "linux") paths (pidfd waitpid, etc). Skip with
 	# `makepkg --nocheck` for a faster iterative build.
 	cd "$_srcdir"
 	export RUSTUP_TOOLCHAIN=stable

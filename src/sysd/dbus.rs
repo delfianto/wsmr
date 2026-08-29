@@ -1,8 +1,8 @@
 //! Typed blocking D-Bus client, porting `uwsm/uwsm/dbus.py`.
 //!
-//! **M1 scaffold:** the proxies and wrapper compile everywhere, but connecting
-//! and calling only works against a live session/system bus on Linux. There is
-//! no integration test on macOS. See `REFERENCE.md` §8.1.
+//! **M1 scaffold:** the proxies and wrapper compile standalone, but connecting
+//! and calling only works against a live session/system bus — exercised by
+//! the Tier-B integration tests, not plain unit tests. See `REFERENCE.md` §8.1.
 
 // The D-Bus `Notify` method legitimately takes many parameters.
 #![allow(clippy::too_many_arguments)]

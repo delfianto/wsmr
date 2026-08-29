@@ -1,6 +1,6 @@
 .PHONY: test test-unit test-linux test-integration fmt clippy coverage coverage-unit
 
-# Unit tests (platform-neutral logic) — runs natively, including on macOS.
+# Unit tests — runs natively on the host.
 test-unit:
 	cargo test
 

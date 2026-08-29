@@ -24,24 +24,34 @@ design reference (unit graph, session lifecycle, env-delta machinery).
 verified vs. still open; don't infer status from this paragraph, which will
 drift — check that file.
 
-## ⚠️ Critical constraint: macOS dev host, Linux-only target
+## Critical constraint: Linux only, for development and runtime alike
 
-Development happens on **macOS**, but `wsmr` targets **Linux only** — it relies on
-systemd, D-Bus, and Wayland at *runtime*, none of which exist on macOS.
+`wsmr` is developed **and** run **on Linux only** — it relies on systemd, D-Bus,
+and Wayland at runtime, and there is no other supported development
+environment. Don't assume a cross-platform dev workflow, and don't add code,
+docs, or scripts that accommodate one; that's already accounted for.
 
 Consequences:
-- The crate is **pure Rust** (`zbus`, `nix`, `libc`) — **no C-library linking**, so
-  it **builds and unit-tests on macOS**. The only platform-specific syscall (pidfd
-  `waitpid`) is `cfg(target_os = "linux")`-gated with a non-Linux stub.
-- What macOS **cannot** do is *run* the session logic (no systemd/D-Bus/Wayland).
-  `cargo run` / `/run` / `/verify` can't exercise it — don't claim runtime behavior
-  was verified unless it ran on Linux.
-- **Linux build/test runs in Podman** (see below). Tier A (build + unit tests
-  on Linux) and Tier B (systemd-as-PID-1 integration tests) both exist and
-  run; Tier B's smoke test asserts the full happy-path session lifecycle as
-  hard, unignored checks, so a green run reflects a real pass — it doesn't
-  yet cover every failure/recovery scenario worth testing (see
-  `docs/fix-plan.md` for exactly which ones). Neither tier runs in CI yet; CI
+- `cargo check`/`build`/`test`/`run` all work directly on the host — no
+  container, VM, or remote step is needed to reach a real systemd/D-Bus/
+  Wayland session. `cargo run -- <args>` needs a live one (see "What this
+  is"), same as it would for any Linux tool.
+- The crate is still **pure Rust** (`zbus`, `nix`, `libc`) with **no
+  C-library linking** — that's a portability property of the dependency
+  choices (see "Crate choices" below), not something the project relies on
+  or tests for. The one platform-specific syscall (pidfd `waitpid`) is
+  `cfg(target_os = "linux")`-gated with a non-Linux stub purely because it's
+  cheap to keep tidy, not because a non-Linux build target is supported.
+- **Containers (Podman) are still used**, but only where isolation is
+  genuinely needed, not to reach Linux at all: Tier A (`scripts/linux-*.sh`)
+  runs build/test/lint inside a clean, pinned Debian image for
+  reproducibility independent of whatever's on the dev host; Tier B needs a
+  container because it boots **systemd as PID 1**, which you can't (and
+  shouldn't) do directly on a running desktop. Tier B's smoke test asserts
+  the full happy-path session lifecycle as hard, unignored checks, so a
+  green run reflects a real pass — it doesn't yet cover every
+  failure/recovery scenario worth testing (see `docs/fix-plan.md` for
+  exactly which ones). Neither tier runs in CI yet; CI
   (`.github/workflows/ci.yml`) runs format-check, lint, build, and
   `cargo test` (roughly `just full-gate` plus an explicit build step), plus
   a separate MSRV job pinned to `Cargo.toml`'s `rust-version`.
@@ -57,42 +67,46 @@ release builds" commit — 1 codegen unit, panic=abort); `build-native` adds
 The raw equivalents:
 
 ```bash
-cargo check          # fast type-check (primary loop on macOS)
+cargo check          # fast type-check — the primary loop
 cargo build          # debug build
-cargo test           # unit/doc tests (platform-neutral logic only on macOS)
+cargo test           # unit/doc tests, including cfg(target_os = "linux") paths
 cargo clippy --all-targets --all-features   # lint
 cargo fmt            # format
-cargo run -- <args>  # Linux only — needs a live systemd/D-Bus session to do anything
+cargo run -- <args>  # needs a live systemd/D-Bus session to do anything
 ```
 
-## Linux build/test (Podman)
+## Reproducible build/test (Podman)
 
-`podman` runs a Linux VM here. Use the wrapper scripts — a bare `cargo test` on
-macOS only covers platform-neutral logic, never the Linux paths:
+Optional, not required to reach Linux (the host already is Linux) — these run
+build/test/lint inside a clean, pinned Debian image, independent of whatever
+toolchain/libraries happen to be installed on the dev host:
 
 ```bash
 scripts/linux-test.sh [filter]   # build + cargo test inside a Debian container (Tier A)
-scripts/linux-build.sh           # cargo build --all-targets + clippy -D warnings on Linux
-scripts/linux-integration.sh     # full session bootstrap on real systemd (Tier B)
+scripts/linux-build.sh           # cargo build --all-targets + clippy -D warnings, containerized
+scripts/linux-integration.sh     # full session bootstrap on real systemd (Tier B — needs the
+                                  # container regardless of host, since it boots systemd as PID 1)
 # or via the Makefile: make test-unit / test-linux / test-integration / test
 ```
 
 ## Code coverage (cargo-llvm-cov)
 
 ```bash
-scripts/coverage.sh unit     # fast NATIVE subset (macOS Homebrew LLVM); not the gate
+scripts/coverage.sh unit     # fast native subset, run directly on the host; not the gate
 scripts/coverage.sh merged   # authoritative >=90% gate (Podman); the real number
 # or: make coverage-unit / make coverage
 ```
 
-- **Merged is the real number.** A macOS unit-test profile and a Linux
-  integration profile can't be merged (different binaries; the `cfg(linux)` pidfd
-  path only exists in the Linux build), so the merged number is produced
-  end-to-end inside one coverage container (`Containerfile.coverage` =
-  systemd-as-PID-1 + Rust): one instrumented build, exercised by BOTH the unit
-  tests and the Tier-B integration smoke, reported together
-  (`tests/integration/coverage-run.sh`), gated at `--fail-under-lines 90`.
-- `scripts/coverage.sh` auto-selects by environment (`uname`, `$CI`,
+- **Merged is the real number.** `unit` mode only exercises what a unit test
+  can reach without a live systemd/D-Bus session — it's a real, useful subset
+  (runs fast, right on the host), but it's not the full picture. `merged`
+  produces the authoritative one end-to-end inside one coverage container
+  (`Containerfile.coverage` = systemd-as-PID-1 + Rust): one instrumented
+  build, exercised by BOTH the unit tests and the Tier-B integration smoke,
+  reported together (`tests/integration/coverage-run.sh`), gated at
+  `--fail-under-lines 90`. This still needs a container even on a Linux host,
+  for the same systemd-as-PID-1 isolation reason Tier B always does.
+- `scripts/coverage.sh` auto-selects by environment (`$CI`,
   `/run/.containerenv`, podman presence): inside a container → run cargo-llvm-cov
   directly; podman available → merged; else native `unit` with a PARTIAL warning.
 - **Pre-exec profile flush:** wsmr ends most processes with `exec()`, which skips
@@ -105,9 +119,9 @@ scripts/coverage.sh merged   # authoritative >=90% gate (Podman); the real numbe
 
 - `Containerfile`: Rust + `build-essential` only (NO libdbus/libsystemd — wsmr is
   pure-Rust `zbus` and shells out to `systemctl`/`systemd-notify`).
-- Source is live bind-mounted; the cargo registry and the Linux `target/` are
-  named volumes (`wsmr-cargo-registry`, `wsmr-linux-target`) kept separate from the
-  host's macOS `target/`.
+- Source is live bind-mounted; the cargo registry and the container's `target/`
+  are named volumes (`wsmr-cargo-registry`, `wsmr-linux-target`) kept separate
+  from the host's own `target/` so the two builds never collide.
 - **Tier B (`Containerfile.systemd`):** boots systemd as PID 1, starts a user
   manager via linger, and runs `tests/integration/smoke.sh` — drives `wsmr start`
   with a stub compositor and asserts the full lifecycle (generate → prepare-env →
@@ -142,9 +156,10 @@ CLI surface to reproduce (from `main.py` argparse):
 
 - **Edition 2024**, rustc ≥ **1.98.0** (pinned as `rust-version` in
   `Cargo.toml`, enforced by CI's MSRV job).
-- Library logic should be testable without a live systemd/D-Bus — isolate
-  side-effecting calls behind small traits/wrappers so the port's logic can be
-  unit-tested on macOS.
+- Library logic should be testable without a live systemd/D-Bus session —
+  isolate side-effecting calls behind small traits/wrappers so the port's
+  logic can be unit-tested fast and in isolation, without needing Tier B's
+  full systemd-as-PID-1 container for every change.
 - Error handling: `Result` everywhere; reserve `panic!`/`unwrap`/`expect` for
   genuine invariants. `thiserror` for the typed library `Error`
   (`src/error.rs`), `anyhow` at the binary boundary (`main.rs`).

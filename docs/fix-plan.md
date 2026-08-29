@@ -727,13 +727,12 @@ machine.
 - [x] Route process-global environment mutation through the serialized test
   helper required by Rust 2024 — already true crate-wide (see above); no
   change needed.
-- [!] Verify the suite on macOS and more than one Linux image. Not done in
-  this session: the environment this work ran in is native CachyOS Linux
-  (matching the project's documented baseline host), with no macOS machine
-  and no second Linux base image available to test against. Only the one
-  Debian `Containerfile` image was exercised (see evidence below). Genuinely
-  open — flag if a macOS/second-distro check is wanted before relying on
-  this.
+- [!] Verify the suite on more than one Linux base image. Not done in this
+  session: the environment this work ran in is native CachyOS Linux, and
+  only the one Debian `Containerfile` image was exercised (see evidence
+  below). Genuinely open — flag if a second-distro check is wanted before
+  relying on this. (macOS is no longer a supported dev/build target at all
+  — see `AGENTS.md` — so a macOS check is not part of this item.)
 
 Acceptance criteria:
 
@@ -749,8 +748,8 @@ Acceptance criteria:
 
 Phase 3 evidence:
 
-- [!] macOS/unit result: not gathered — no macOS environment available this
-  session (see the `[!]` note above).
+- [~] macOS/unit result: N/A — macOS is no longer a supported dev/build
+  target (see `AGENTS.md`); superseded by the CachyOS/native result below.
 - [x] CachyOS result: `cargo test` — 201 passed, 0 failed. `cargo clippy
   --all-targets --all-features -- -D warnings` and `cargo fmt --check` both
   clean.

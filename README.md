@@ -151,13 +151,14 @@ generated units. Don't call them by hand unless you're debugging.
 
 ## Development & testing
 
-wsmr is developed on **macOS** but only *runs* on **Linux** (no
-systemd/D-Bus/Wayland on Darwin). Because it's pure Rust, it builds and
-unit-tests on either; the macOS run just skips the Linux-only paths.
+wsmr is developed **and** run on **Linux only** — there's no other supported
+dev environment. `cargo`/`just` commands work directly on the host, including
+the `cfg(target_os = "linux")` code paths (no container or VM needed just to
+reach them).
 
 ```sh
 just lint            # clippy -D warnings only
-just test            # unit/doc tests (on Linux this also runs the cfg(linux) code)
+just test            # unit/doc tests, including the cfg(linux) code
 just full-gate       # format --check-only + lint + test — mirrors what CI actually runs
 ```
 
@@ -167,9 +168,10 @@ separate MSRV job that repeats build+test pinned to the exact
 `rust-version` in `Cargo.toml`. That's it — no coverage gate, no Tier B, no
 integration matrix.
 
-Anything touching a live session runs in Podman (works on macOS via a Linux VM,
-natively on Linux) and is **local-only** — none of the following run in CI
-today:
+Anything touching a live session runs in Podman — not to reach Linux (the
+host already is Linux), but because Tier B boots systemd as PID 1, which
+needs a container's isolation regardless of host setup. **Local-only** —
+none of the following run in CI today:
 
 ```sh
 just test-linux      # Tier A: build + unit tests in a Debian container

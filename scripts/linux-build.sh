@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build + lint wsmr for Linux inside a Podman container. Same volume strategy as
-# linux-test.sh (separate Linux target dir from the host macOS target/).
+# Build + lint wsmr inside a clean Debian Podman container, for the same
+# reproducibility reason as linux-test.sh. Same volume strategy: a container-
+# only target dir kept separate from the host's `target/`.
 set -euo pipefail
 
 IMAGE="wsmr-linux-dev"
