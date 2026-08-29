@@ -1436,22 +1436,67 @@ repeatable script.
   a full pre/post `systemctl --user show-environment` diff was captured).
   **Not restored**: `WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP`,
   `XDG_SESSION_DESKTOP`, `XDG_BACKEND`, and `XDG_MENU_PREFIX` all remained
-  in the manager environment after stop. Likely root cause (well-supported,
-  not fully proven): `XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX`
-  are never touched by wsmr's own `finalize` code at all, so they cannot
-  have come from wsmr's tracked export path — they were almost certainly
-  pushed into the systemd activation environment directly by Hyprland or
-  `/usr/bin/start-hyprland` via their own `dbus-update-activation-environment`
-  call, bypassing `finalize`'s `state::append_cleanup` tracking entirely, so
-  `cleanup-env` had no record of them to unset. This is a real difference
-  from Phase 4's Tier-B smoke test, where the stub compositor explicitly
-  calls `wsmr finalize` itself and the full export set is cleanly tracked
-  and restored — a real compositor with its own independent env-export
-  habits is not the same test. Not necessarily a wsmr defect in the
-  traditional sense (upstream `uwsm` has the identical structural
-  limitation: it can only clean up what was exported through it), but it
-  does mean "exact environment restoration" is not actually true here
-  today. This is the gap slated for deeper investigation next.
+  in the manager environment after stop.
+
+  **Root cause confirmed for `WAYLAND_DISPLAY`/`XDG_CURRENT_DESKTOP`, not
+  a wsmr defect.** `strings /usr/bin/Hyprland` shows Hyprland has this
+  exact pair of shell commands embedded in its own startup/shutdown paths,
+  entirely independent of wsmr:
+
+  ```sh
+  # on startup:
+  systemctl --user import-environment DISPLAY WAYLAND_DISPLAY \
+      HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME \
+      PATH XDG_DATA_DIRS \
+    && hash dbus-update-activation-environment 2>/dev/null \
+    && dbus-update-activation-environment --systemd WAYLAND_DISPLAY \
+         XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME \
+         PATH XDG_DATA_DIRS
+
+  # mirror-image unset-environment command also present for shutdown
+  ```
+
+  So Hyprland exports these itself on start (explaining why they were set
+  at all — not via wsmr's `finalize`/`state::append_cleanup` path, which
+  never touches `XDG_DATA_DIRS`/`QT_QPA_PLATFORMTHEME` and had no record of
+  this export to clean up), *and* ships a matching unexport call for
+  shutdown. That its own unexport never ran points at *when* it runs, not
+  *whether* it exists: almost certainly wired to Hyprland's own graceful
+  exit dispatcher (e.g. `hyprctl dispatch exit`), not to receiving a bare
+  signal. `wsmr stop` stops `wayland-wm@hyprland.desktop.service` via
+  systemd with no custom `ExecStop=`, so systemd sends the unit's default
+  `KillSignal` (`SIGTERM`) — if Hyprland's unexport hook only fires from
+  its internal exit path, a systemd-initiated `SIGTERM` kills it before
+  that hook ever runs, leaving these two vars stuck. Not independently
+  confirmed with a live SIGTERM-vs-`hyprctl dispatch exit` comparison (would
+  need a fresh session), but strongly supported by the binary's own
+  embedded commands rather than a guess. If accurate, this is squarely
+  Hyprland's own environment-export design not being signal-safe — wsmr has
+  no hook into a wrapped compositor's internal dispatcher, and correctly
+  cleaned up 100% of what it exported through `finalize` itself. Upstream
+  `uwsm` would hit the identical gap for the identical reason.
+
+  **`XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX` root cause not
+  pinned down.** None of these three appear in the Hyprland import/export
+  command above, so that specific mechanism doesn't explain them (though
+  `XDG_MENU_PREFIX=hyprland-` still looks Hyprland-authored, just via some
+  other path not yet found). More importantly: **no true pre-`wsmr start`
+  baseline was captured for this real-hardware run** — only a mid-session
+  ("pre-stop") snapshot was compared against post-stop, unlike Phase 4's
+  Tier-B smoke test, which does capture a real pre-start baseline. It's
+  possible one or more of these three predates `wsmr start` entirely (e.g.
+  set by the login process itself via PAM for a `tty`-class session) and
+  was never wsmr's or Hyprland's to clean up in the first place — genuinely
+  unknown either way from today's evidence. A repeat run capturing a real
+  pre-start baseline would resolve this cleanly.
+
+  This is a real difference from Phase 4's Tier-B smoke test, where the
+  stub compositor explicitly calls `wsmr finalize` itself and the full
+  export set is cleanly tracked and restored — a real compositor with its
+  own independent env-export habits, exercised for the first time today, is
+  not the same test. Net effect either way: "exact environment restoration"
+  is not actually true here today, for reasons outside wsmr's own generation
+  and cleanup logic as far as investigated so far.
 - [x] No failed units, stale state, temporary files, or owned unit files
   remain. `systemctl --user list-units --failed` returned empty after stop.
   (Did not separately re-verify no stale temp/manifest files on disk this
