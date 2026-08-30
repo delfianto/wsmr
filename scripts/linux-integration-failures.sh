@@ -6,14 +6,15 @@
 #
 # Usage: scripts/linux-integration-failures.sh [scenario...]
 # With no arguments, runs all scenarios. Scenario names: crash-before-readiness,
-# readiness-timeout, unclean-exit.
+# readiness-timeout, unclean-exit, prepare-env-failure, interrupted-start,
+# finalize-partial-failure.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMG_BUILD="wsmr-linux-dev"
 IMG_SYS="wsmr-linux-systemd"
 
-ALL_SCENARIOS=(crash-before-readiness readiness-timeout unclean-exit)
+ALL_SCENARIOS=(crash-before-readiness readiness-timeout unclean-exit prepare-env-failure interrupted-start finalize-partial-failure)
 SCENARIOS=("${@:-${ALL_SCENARIOS[@]}}")
 
 echo "==> building the Linux binary (Tier A)"
@@ -70,6 +71,9 @@ for s in "${SCENARIOS[@]}"; do
         crash-before-readiness) run_scenario "$s" smoke-crash-before-readiness.sh || FAILED_SCENARIOS+=("$s") ;;
         readiness-timeout) run_scenario "$s" smoke-readiness-timeout.sh || FAILED_SCENARIOS+=("$s") ;;
         unclean-exit) run_scenario "$s" smoke-unclean-exit.sh || FAILED_SCENARIOS+=("$s") ;;
+        prepare-env-failure) run_scenario "$s" smoke-prepare-env-failure.sh || FAILED_SCENARIOS+=("$s") ;;
+        interrupted-start) run_scenario "$s" smoke-interrupted-start.sh || FAILED_SCENARIOS+=("$s") ;;
+        finalize-partial-failure) run_scenario "$s" smoke-finalize-partial-failure.sh || FAILED_SCENARIOS+=("$s") ;;
         *) echo "unknown scenario: $s" >&2; exit 2 ;;
     esac
 done
