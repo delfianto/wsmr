@@ -27,19 +27,23 @@ verification command or evidence in the phase's evidence section.
 
 ## Overall gates
 
-- [~] **G0 — Safe generation:** Phase 0 is complete before running wsmr against
+- [x] **G0 — Safe generation:** Phase 0 is complete before running wsmr against
   the active user's systemd user manager. File-level ownership/atomicity work
   is done and unit-tested; **partially closed by Phase 4's live Tier-B run**:
   `refuse_if_active` (duplicate start), plan/apply generation, and reload are
   now proven against a real, unmocked systemd user manager, not just
-  pure-logic tests (`fix-plan.md` Phase 4, "duplicate start" evidence). Still
-  open: reload-*failure* handling specifically — no scenario here injects a
-  failing reload or a corrupted generation mid-flight; that's P4-03's
-  "interrupted start/generation," explicitly deferred. `SessionBus` still has
-  no injectable mocking seam (only Phase 3's system-bus `SessionLookup`
-  does), so unit-level coverage of the failure paths remains unchanged — the
-  live run adds real-world evidence for the happy/refusal paths, it doesn't
-  replace the missing seam for failure paths.
+  pure-logic tests (`fix-plan.md` Phase 4, "duplicate start" evidence).
+  **Closed 2026-08-30**: a new `SessionOps`/`EnvUpdateOps` mocking seam
+  (`src/sysd/dbus.rs`, mirroring Phase 3's `SessionLookup`) now covers the
+  failure paths too — `run()`'s double-start refusal driven end-to-end
+  against a fake bus (not just the pure predicate), a failing reload after a
+  successful `apply_generate` proven to leave a coherent on-disk generation
+  (P0-01/P0-04), and `PartialEnvUpdate`'s branch logic exercised directly
+  (P1-03) — see those sections' evidence. Still genuinely open: P4-03's
+  "interrupted start/generation" (corrupted generation mid-flight, a
+  Tier-B/container scenario, not a unit-test one) remains explicitly
+  deferred, and `session::state::begin_generation`/`end_generation` (a
+  different module from `start::run`) still has no seam of its own.
 - [~] **G1 — Safe state handling:** Phases 0 and 1 are complete before a real
   Hyprland login is attempted. Locking/atomicity/generation-scoping is done
   and unit-tested (including a genuine concurrent-OS-thread test); **also
@@ -91,15 +95,17 @@ verification command or evidence in the phase's evidence section.
 - Host: CachyOS, Wayland, Hyprland 0.56.2, systemd 261, dbus-broker.
 - The active desktop is managed by uwsm 0.26.7, not wsmr.
 - Formatting, clippy, and build checks pass.
-- Unit tests currently report **236 passing, 0 failing** (217 lib + 18 in the
+- Unit tests currently report **243 passing, 0 failing** (224 lib + 18 in the
   `wsmr` binary's own test target + 1 integration test comparing generated
   units against a real uwsm 0.26.7 install, Phase 6) — the 3 originally
   pre-existing host-dependent failures were root-caused and fixed in Phase 3
   (an XDG-dirs test-isolation bug and a hardcoded system-bus dependency).
-  Was 166/3 before Phase 0; the 234→236 lib-test increase on 2026-08-30 is
-  the two new tests covering Phase 7's reclaim-stale fix
+  Was 166/3 before Phase 0. 2026-08-30 added 9 lib tests: 2 for Phase 7's
+  reclaim-stale fix
   (`reclaim_stale_adopts_a_foreign_dropin_instead_of_blocking`,
-  `reclaim_stale_never_applies_to_the_static_graph`). Verified in both the native CachyOS
+  `reclaim_stale_never_applies_to_the_static_graph`) and 7 for the G0/G1
+  `SessionOps`/`EnvUpdateOps` mocking seam (2 in `session::start`, 5 in
+  `sysd::dbus`). Verified in both the native CachyOS
   host and the clean Linux container after every phase, including Phase 2,
   where the container caught a genuinely new host-dependence bug this
   session introduced (see Phase 2 evidence) — the two-environment habit paid
@@ -149,15 +155,19 @@ manager before checking whether a compositor is already active.
 
 Acceptance criteria:
 
-- [~] With a fake active unit, `start` returns the documented conflict result.
+- [x] With a fake active unit, `start` returns the documented conflict result.
   No generation writer or reload method is called. The refusal predicate
   itself is unit-tested in isolation
   (`session::start::tests::refuse_if_active_blocks_only_when_active`), and the
-  call order in `run` is linear/reviewable so it can't silently regress, but
-  there is **no automated test that drives `run()` end-to-end against a real
-  or mocked session bus** — `SessionBus` has no injectable seam yet. That's
-  Phase 3's P3-02 (or a Tier-B scenario). Not closing this out until one of
-  those lands.
+  call order in `run` is linear/reviewable so it can't silently regress.
+  **Closed 2026-08-30**: `run()` split into a thin bus-connecting wrapper and
+  `run_with(comp, opts, bus: &impl SessionOps)`, mirroring Phase 3's
+  `SessionLookup` pattern (`src/sysd/dbus.rs`'s new `SessionOps` trait).
+  `run_with_refuses_when_already_active_and_touches_nothing` now drives
+  `run_with` itself end-to-end against a fake bus reporting an active unit,
+  asserting both the refusal message and that the temp rung directory stays
+  empty (never reached `plan_generate`) — the actual gap this bullet named,
+  not just the pure predicate.
 - [x] Runtime unit-directory contents and hashes remain unchanged (on refusal,
   nothing downstream of the check runs, so trivially true; separately proven
   for the plan/apply split by
@@ -255,14 +265,20 @@ Acceptance criteria:
 - [x] Publish the manifest only for a coherent generation. `manifest.save()`
   is the last step of `apply_generate`/`apply_removal`, after every file write
   and removal in the batch has already succeeded.
-- [~] Handle write, rename, and `daemon-reload` failures without leaving a
+- [x] Handle write, rename, and `daemon-reload` failures without leaving a
   mixed old/new graph. Write/rename failures: handled and tested (rollback,
-  below). `daemon-reload` failure specifically: not yet handled/tested — if
-  `bus.reload()` fails after `apply_generate` succeeds, the on-disk graph and
-  manifest are already fully coherent (never mixed), but the *running* user
-  manager may not have picked up the new generation until a later reload;
-  there's no test pinning that behavior down, and no explicit recovery
-  message distinguishing "written but not reloaded" from other failures.
+  below). **`daemon-reload` failure: closed 2026-08-30** — using the same
+  `SessionOps` seam as P0-01,
+  `run_with_surfaces_reload_failure_after_a_coherent_generation` runs a real
+  `plan_generate`/`apply_generate` against a temp dir, injects a failing
+  fake `reload()`, and asserts both that the error surfaces *and* the
+  on-disk generation is still complete and manifest-verified — the
+  documented fail-closed behavior, now actually exercised instead of only
+  asserted in a comment. Still true as stated: a failing reload leaves the
+  *running* user manager not yet picked up until a later reload, and there's
+  still no dedicated "written but not reloaded" error message distinct from
+  other reload failures — that finer distinction wasn't part of what this
+  pass closed.
 - [~] Add a transaction/rollback guard or document and test an equally safe
   recovery strategy. Implemented: a same-call rollback guard
   (`Applied`/`rollback` in `src/units/generate.rs`) restores every
@@ -279,10 +295,10 @@ Acceptance criteria:
 
 Acceptance criteria:
 
-- [~] Fault injection at each write/rename/reload boundary leaves either the
+- [x] Fault injection at each write/rename/reload boundary leaves either the
   old valid generation or the new valid generation. Write/rename boundary:
-  covered by the rollback test above. Reload boundary: not covered (needs a
-  live/mocked bus — same gap as P0-01).
+  covered by the rollback test above. Reload boundary: closed 2026-08-30,
+  same evidence as the bullet above.
 - [x] No temporary files remain after success or handled failure
   (`fsutil::tests::writes_and_overwrites_leaving_no_temp_files`; rollback
   reuses `atomic_write`/`remove_file`, which clean up their own temp files on
@@ -416,10 +432,21 @@ Finding: `src/session/finalize.rs`, `src/session/exec.rs`, and
   `PartialEnvUpdate { operation, applied, failed, source }` names both sides
   by construction; `error::tests::partial_env_update_names_both_sides`
   asserts the rendered message contains all of them.
-- [!] Test restart/recovery after simulated process termination. Not done —
-  needs a live/mocked D-Bus session bus to simulate a mid-update process
-  kill, same gap as Phase 0's P0-01. Blocked pending Phase 3 (or a Tier-B
-  scenario).
+- [~] Test restart/recovery after simulated process termination. **Narrowed
+  and partially closed 2026-08-30**: a literal mid-update process-kill
+  simulation is out of scope for a unit test (as this bullet's own original
+  wording already implied by needing "a live/mocked D-Bus session bus" —
+  there's no process to kill in a fake). What *is* now covered, via a new
+  `EnvUpdateOps` seam mirroring `SessionOps` (`src/sysd/dbus.rs`): the
+  `set_systemd_vars`/`unset_systemd_vars` sequencing itself is extracted
+  into `set_systemd_vars_with`/`unset_systemd_vars_with`, generic over
+  `EnvUpdateOps`, and 5 new tests confirm `PartialEnvUpdate` fires correctly
+  when either side fails after the other already succeeded (both
+  directions), the D-Bus step is skipped entirely under dbus-broker, and a
+  first-op (or dbus-broker-mode second-op) failure surfaces as plain
+  `Error::Dbus`, not `PartialEnvUpdate`. That's the actual decision logic
+  this bullet was gesturing at; a literal process-kill scenario remains
+  open, but would need a live/Tier-B setup, not a unit test.
 
 Acceptance criteria:
 
