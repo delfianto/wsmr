@@ -521,6 +521,33 @@ fn unset_systemd_vars_with(ops: &impl EnvUpdateOps, names: &[String]) -> Result<
     Ok(())
 }
 
+/// Session-bus operations [`crate::session::state`] needs to restore/clear
+/// the activation environment, abstracted so `begin_generation`/
+/// `end_generation` are unit-testable without a live session bus.
+/// `SessionBus` is the production implementation; tests inject a fake. Same
+/// pattern as [`SessionOps`]/[`EnvUpdateOps`], scoped to what `state.rs`'s
+/// restore-and-clear path uses.
+pub trait StateOps {
+    /// Same contract as [`SessionBus::systemd_vars`].
+    fn systemd_vars(&self) -> Result<BTreeMap<String, String>>;
+    /// Same contract as [`SessionBus::set_systemd_vars`].
+    fn set_systemd_vars(&self, vars: &BTreeMap<String, String>) -> Result<()>;
+    /// Same contract as [`SessionBus::unset_systemd_vars`].
+    fn unset_systemd_vars(&self, names: &[String]) -> Result<()>;
+}
+
+impl StateOps for SessionBus {
+    fn systemd_vars(&self) -> Result<BTreeMap<String, String>> {
+        SessionBus::systemd_vars(self)
+    }
+    fn set_systemd_vars(&self, vars: &BTreeMap<String, String>) -> Result<()> {
+        SessionBus::set_systemd_vars(self, vars)
+    }
+    fn unset_systemd_vars(&self, names: &[String]) -> Result<()> {
+        SessionBus::unset_systemd_vars(self, names)
+    }
+}
+
 impl SystemBus {
     fn systemd(&self) -> Result<SystemdManagerProxyBlocking<'_>> {
         Ok(SystemdManagerProxyBlocking::new(&self.conn)?)
