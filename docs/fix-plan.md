@@ -87,12 +87,16 @@ verification command or evidence in the phase's evidence section.
   full app-launch surface (Hyprland keybind launches *and* Noctalia v5's own
   GUI launcher, once configured with `launch_apps_custom_command = "wsmr
   app -- $CMD"`) was also verified end to end against this real desktop.
-  Still not closed: P7-04's failure scenarios are still mostly unwritten,
-  the Hyprland environment-restoration bug and the intermittent third-party
-  portal crash-on-teardown issue from 2026-08-29 remain (see Phase 7
-  evidence), and no pre/post environment-restoration diff was captured for
-  the 2026-08-30 primary-account run — only unit-graph and app-launcher
-  health were checked there.
+  Still not closed: P7-04's failure scenarios are still mostly unwritten
+  (one, "compositor configuration error before readiness," closed later on
+  2026-08-30 once sudo access became available — see P7-04), the Hyprland
+  environment-restoration bug and the intermittent third-party portal
+  crash-on-teardown issue from 2026-08-29 remain (see Phase 7 evidence), and
+  no pre/post environment-restoration diff was captured for the 2026-08-30
+  primary-account run — only unit-graph and app-launcher health were
+  checked there. The three unrestored env vars from 2026-08-29
+  (`XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX`) were separately
+  root-caused as pre-existing manager state, not a wsmr defect (see P7-03).
 
 ## Current baseline
 
@@ -1894,21 +1898,47 @@ part of verifying wsmr's real-world app-launch behavior.
 
 ### P7-04 Exercise live failure recovery
 
-- [ ] Test a compositor configuration error before readiness. Not tested.
-  Three analogous scenarios were instead covered at the Tier-B container
-  level on 2026-08-30 (see P4-03: compositor exits before readiness,
-  readiness timeout, unclean exit) — real evidence, but a container's
-  stub compositor, not this account's real Hyprland on real hardware.
-- [ ] Test a compositor crash after readiness. Not tested on real hardware
-  (see note above — the Tier-B "unclean exit" scenario is the closest
-  analog that does exist). A 2026-08-30 attempt specifically on the
-  disposable `wsmr` account was blocked: it requires root
-  (`sudo -u wsmr ...`, per `scripts/e2e-harness.sh`'s own design) to reach
-  that account's user manager/D-Bus bus, and the sandboxed environment that
-  attempt ran in had no passwordless `sudo`. Not retried from a session with
-  broader privileges — genuinely open, not a hard blocker in general.
-- [ ] Test login cancellation/forced termination. Not tested, same `sudo`
-  constraint as above.
+- [x] Test a compositor configuration error before readiness. **Closed
+  2026-08-30**, on the real disposable `wsmr` account (uid 1002) once sudo
+  access became available: `wsmr start -e -D Hyprland Hyprland --config
+  /nonexistent/broken-on-purpose.conf` (via `sudo -u wsmr env
+  XDG_RUNTIME_DIR=... DBUS_SESSION_BUS_ADDRESS=... wsmr start ...`, the same
+  pattern `scripts/e2e-harness.sh` uses). `wayland-wm-env@Hyprland.service`
+  failed immediately (exit 1), `graphical-session.target` never activated,
+  and the `OnFailure=` cascade left **zero failed units and zero lingering
+  units** afterward — cleaner even than the container analog, since this ran
+  against the account's real, long-lived `user@1002.service` rather than a
+  fresh boot. Three analogous scenarios were also covered at the Tier-B
+  container level the same day (see P4-03: compositor exits before
+  readiness, readiness timeout, unclean exit); this is the real-hardware
+  confirmation of the same class of behavior.
+- [~] Test a compositor crash after readiness. **Attempted for real
+  2026-08-30, found a harder blocker than sudo.** With sudo access working,
+  `wsmr start -e -D Hyprland hyprland.desktop` was tried the same way as
+  above (targeting a free VT, never the primary user's active `tty1` —
+  confirmed unchanged throughout via `/sys/class/tty/tty0/active` polled
+  every second during the attempt). It failed at the environment-preloader
+  stage with `Error: could not resolve could not determine login session on
+  VT 1` — `session::prepare::deduce_session` (the Phase 3 `SessionLookup`
+  seam) correctly refusing because `sudo -u wsmr` gives the process no real
+  logind session/seat context, unlike a genuine console login. This matches
+  exactly what 2026-08-29's original P7-01 evidence required (a real
+  `getty`-mediated VT login) to get a working compositor at all — it is not
+  a sudo/privilege problem, it's that reaching actual compositor readiness
+  on real hardware needs a real interactive console login (typing
+  credentials into a VT), which isn't safely scriptable from here without
+  risking exactly the VT-switch disruption to the primary user's live
+  desktop this was designed to avoid. Positive side effect: this *is* real,
+  new evidence that `deduce_session`'s failure path works correctly under a
+  genuine unprivileged-session condition on real hardware, not just its
+  existing `FakeLookup` unit tests. The Tier-B "unclean exit" scenario
+  (P4-03, commit `fabd360`) remains the closest analog that *is* fully
+  covered — same class of teardown-and-recover behavior, verified via a
+  stub compositor instead.
+- [ ] Test login cancellation/forced termination. Same blocker as the
+  crash-after-readiness attempt above — needs actual compositor readiness
+  first, which needs a real console login this environment can't safely
+  script.
 - [~] Verify the account can subsequently start a fresh wsmr session. Not a
   *designed* scenario, but real, live evidence landed anyway: mid-session,
   the unrelated stale `/usr/local/bin/wsmr` binary (see P7-01) was deleted
