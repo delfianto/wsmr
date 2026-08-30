@@ -274,9 +274,34 @@ echo "== stop when already stopped is a clean no-op =="
 echo "PASS: stop-when-already-stopped is a clean no-op"
 
 echo "== asserting the compositor and its child processes are gone =="
-if pgrep -f stub-compositor.sh >/dev/null 2>&1; then
+# Bounded retry, not an immediate single-shot check: `wsmr stop` returns once
+# systemd's stop job completes, which can be a few milliseconds ahead of the
+# kernel actually reaping the process.
+#
+# The pattern is anchored to the END of the command line (`$`), not a bare
+# substring: an unanchored `pgrep -f stub-compositor.sh` also matches any
+# harness process that merely mentions this script's path as an argument
+# elsewhere in its own invocation — e.g. coverage-run.sh's `runuser -u
+# tester -- env ... STUB=/workspace/.../stub-compositor.sh ... bash
+# smoke.sh`, where `runuser` stays alive as a PAM-session supervisor for
+# smoke.sh's entire run, keeping that string permanently visible in its own
+# argv. That's a false positive on the test's *own* invocation, not the
+# compositor process — confirmed live by dumping `ps -eo pid,ppid,stat,cmd`
+# at the failure point, which showed exactly one match: that outer `runuser`
+# line, still present because smoke.sh (this very script) was still running.
+# A real compositor invocation's command line *ends* with the script path
+# (`sh /path/to/stub-compositor.sh`), which the anchor still catches.
+for _ in $(seq 1 20); do
+    pgrep -f 'stub-compositor\.sh$' >/dev/null 2>&1 || break
+    sleep 0.3
+done
+if pgrep -f 'stub-compositor\.sh$' >/dev/null 2>&1; then
     fail "stub-compositor.sh process is still running after stop"
 fi
+for _ in $(seq 1 20); do
+    pgrep -x socat >/dev/null 2>&1 || break
+    sleep 0.3
+done
 if pgrep -x socat >/dev/null 2>&1; then
     fail "socat (wayland-stub listener) is still running after stop"
 fi
