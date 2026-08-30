@@ -56,8 +56,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman
 
-      - name: Run Tier-B integration smoke
+      - name: Run Tier-B integration smoke (happy path)
         run: bash scripts/linux-integration.sh
+
+      - name: Run Tier-B failure/recovery scenarios
+        run: bash scripts/linux-integration-failures.sh
 
   msrv:
     name: msrv (rust-version from Cargo.toml)
