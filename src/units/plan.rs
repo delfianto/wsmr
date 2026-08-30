@@ -41,12 +41,18 @@ pub struct Conflict {
 /// A pure plan for [`super::generate::apply_generate`].
 #[derive(Debug)]
 pub struct GenerationPlan {
-    /// Files to create or update.
+    /// Files to create or update. Includes any reclaimed drop-ins (see
+    /// [`Self::reclaimed`]) — those are ordinary writes once accepted.
     pub writes: Vec<PlannedWrite>,
     /// Now-unneeded drop-ins to remove (only ones wsmr verifiably owns).
     pub removes: Vec<PlannedRemove>,
     /// Destinations that block the whole plan until resolved.
     pub conflicts: Vec<Conflict>,
+    /// Relative names of foreign drop-ins/tweaks that were folded into
+    /// `writes` instead of `conflicts` because `reclaim_stale` was set (see
+    /// [`plan_generate`]) — reported so a caller can tell the user what got
+    /// silently adopted rather than just going quiet about it.
+    pub reclaimed: Vec<String>,
     pub(super) manifest: Manifest,
 }
 
@@ -72,17 +78,31 @@ pub struct RemovalPlan {
 /// graph, the fixed tweak drop-ins (written when `tweaks_enabled`, else
 /// removed if wsmr owns them — see `templates::TWEAKS`), and this
 /// compositor's `50_custom.conf` drop-ins. Read-only.
+///
+/// `reclaim_stale` controls what happens when a per-compositor drop-in or
+/// tweak already exists but isn't verifiably wsmr's own: when `true`, it's
+/// folded into `writes` (and named in `GenerationPlan::reclaimed`) instead of
+/// blocking as a `Conflict`. Callers should only pass `true` once they've
+/// independently confirmed (via systemd, not this file-only check) that no
+/// session is currently active — see `session::start::run`, the only
+/// production caller, which does exactly that before calling this. The
+/// static graph units are never reclaimed regardless of this flag: they're
+/// intentionally byte-identical shared infrastructure with uwsm (see
+/// `plan_remove_all`'s docs), so a mismatch there is worth a hard stop no
+/// matter what.
 pub fn plan_generate(
     dir: &Path,
     ctx: &RenderCtx,
     dropins: &DropinInput,
     tweaks_enabled: bool,
+    reclaim_stale: bool,
 ) -> Result<GenerationPlan> {
     let manifest = Manifest::load(dir)?;
     let mut plan = GenerationPlan {
         writes: Vec::new(),
         removes: Vec::new(),
         conflicts: Vec::new(),
+        reclaimed: Vec::new(),
         manifest,
     };
 
@@ -93,7 +113,7 @@ pub fn plan_generate(
 
     for tweak in templates::TWEAKS {
         let wanted = tweaks_enabled.then(|| templates::render(tweak.body, ctx));
-        classify_dropin(dir, tweak.name, wanted, &mut plan)?;
+        classify_dropin(dir, tweak.name, wanted, reclaim_stale, &mut plan)?;
     }
 
     let preloader = format!(
@@ -108,9 +128,16 @@ pub fn plan_generate(
         dir,
         &preloader,
         templates::preloader_dropin(dropins),
+        reclaim_stale,
         &mut plan,
     )?;
-    classify_dropin(dir, &service, templates::service_dropin(dropins), &mut plan)?;
+    classify_dropin(
+        dir,
+        &service,
+        templates::service_dropin(dropins),
+        reclaim_stale,
+        &mut plan,
+    )?;
 
     Ok(plan)
 }
@@ -155,6 +182,7 @@ fn classify_dropin(
     dir: &Path,
     relname: &str,
     wanted: Option<String>,
+    reclaim_stale: bool,
     plan: &mut GenerationPlan,
 ) -> Result<()> {
     let path = dir.join(relname);
@@ -173,6 +201,18 @@ fn classify_dropin(
             if existing == content {
                 // no-op
             } else if plan.manifest.verify(relname, &existing) {
+                plan.writes.push(PlannedWrite {
+                    relname: relname.to_string(),
+                    content,
+                });
+            } else if reclaim_stale {
+                // Foreign content at a path only a session manager would ever
+                // write (a per-compositor `50_custom.conf` or fixed tweak),
+                // and the caller has already confirmed no session is
+                // currently active. Most likely leftovers from a previous
+                // uwsm/wsmr session that never got cleaned up — safe to
+                // adopt rather than block on.
+                plan.reclaimed.push(relname.to_string());
                 plan.writes.push(PlannedWrite {
                     relname: relname.to_string(),
                     content,
@@ -338,7 +378,7 @@ mod tests {
         let before: Vec<_> = std::fs::read_dir(td.path()).unwrap().collect();
         assert!(before.is_empty());
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true, false).unwrap();
         assert!(plan.conflicts.is_empty());
         // graph + both dropins (the absolute cmdline in `dropin_input()`
         // triggers both the preloader's `-- %I <path>` override and the
@@ -355,7 +395,7 @@ mod tests {
     #[test]
     fn absent_destination_plans_a_write() {
         let td = TempDir::new();
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true, false).unwrap();
         assert!(
             plan.writes
                 .iter()
@@ -372,7 +412,7 @@ mod tests {
         )
         .unwrap();
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true, false).unwrap();
         assert!(
             plan.conflicts
                 .iter()
@@ -389,6 +429,41 @@ mod tests {
             std::fs::read_to_string(td.path().join("wayland-wm@.service")).unwrap(),
             "# hand-written by someone else\n"
         );
+    }
+
+    #[test]
+    fn reclaim_stale_adopts_a_foreign_dropin_instead_of_blocking() {
+        let td = TempDir::new();
+        let relname = "wayland-wm@sway.service.d/50_custom.conf";
+        std::fs::create_dir_all(td.path().join("wayland-wm@sway.service.d")).unwrap();
+        std::fs::write(
+            td.path().join(relname),
+            "not ours, and no session is using it\n",
+        )
+        .unwrap();
+
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true, true).unwrap();
+        assert!(plan.conflicts.is_empty());
+        assert!(plan.reclaimed.iter().any(|r| r == relname));
+        assert!(plan.writes.iter().any(|w| w.relname == relname));
+    }
+
+    #[test]
+    fn reclaim_stale_never_applies_to_the_static_graph() {
+        let td = TempDir::new();
+        std::fs::write(
+            td.path().join("wayland-wm@.service"),
+            "# hand-written by someone else\n",
+        )
+        .unwrap();
+
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true, true).unwrap();
+        assert!(
+            plan.conflicts
+                .iter()
+                .any(|c| c.relname == "wayland-wm@.service")
+        );
+        assert!(plan.reclaimed.is_empty());
     }
 
     #[test]
@@ -410,7 +485,7 @@ mod tests {
             bin_path: "/usr/local/bin/wsmr".into(),
             waitpid_bin: "waitpid".into(),
         };
-        let plan = plan_generate(td.path(), &new_ctx, &dropin_input(), true).unwrap();
+        let plan = plan_generate(td.path(), &new_ctx, &dropin_input(), true, false).unwrap();
         assert!(plan.conflicts.is_empty());
         assert!(plan.writes.iter().any(|w| w.relname == unit.name));
     }
@@ -431,7 +506,7 @@ mod tests {
         );
         manifest.save(td.path()).unwrap();
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true, false).unwrap();
         assert!(
             plan.conflicts
                 .iter()
@@ -446,7 +521,7 @@ mod tests {
         // simulate a file another tool wrote with byte-identical content, no manifest at all
         std::fs::write(td.path().join(templates::GRAPH[0].name), &content).unwrap();
 
-        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &dropin_input(), true, false).unwrap();
         assert!(plan.conflicts.is_empty());
         assert!(
             !plan
@@ -475,7 +550,7 @@ mod tests {
             cmdline: vec!["sway".into()],
             ..Default::default()
         };
-        let plan = plan_generate(td.path(), &ctx(), &minimal, true).unwrap();
+        let plan = plan_generate(td.path(), &ctx(), &minimal, true, false).unwrap();
         assert!(plan.conflicts.is_empty());
         assert!(!plan.removes.iter().any(|r| r.relname == relname));
         assert_eq!(

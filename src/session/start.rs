@@ -80,11 +80,15 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
         bin_path: opts.bin_path.clone(),
         waitpid_bin: "waitpid".into(),
     };
+    // Safe to reclaim stale foreign drop-ins here: `refuse_if_active` above
+    // already confirmed (via systemd, not just this directory) that no
+    // compositor or graphical session is currently running.
     let plan = plan_generate(
         &dir,
         &ctx,
         &build_dropins(comp, &opts.bin_path),
         opts.tweaks,
+        true,
     )?;
 
     // Dry-run always reports the full plan — including any conflicts — before
@@ -99,6 +103,14 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
     if opts.dry_run {
         println!("Dry run: would start {}.", comp.id);
         return Ok(());
+    }
+    if !plan.reclaimed.is_empty() {
+        crate::session::log_notice_to_journal(&format!(
+            "wsmr: adopting {} stale unit override(s) left behind by another session (none is \
+             currently active): {}",
+            plan.reclaimed.len(),
+            plan.reclaimed.join(", ")
+        ));
     }
 
     // (4) apply the plan for real, then reload only if it actually changed
@@ -208,7 +220,14 @@ fn report_plan(dir: &Path, plan: &GenerationPlan) {
         return;
     }
     for w in &plan.writes {
-        println!("  + {}", w.relname);
+        if plan.reclaimed.iter().any(|r| r == &w.relname) {
+            println!(
+                "  ~ {} (reclaiming a stale foreign copy \u{2014} no session is active)",
+                w.relname
+            );
+        } else {
+            println!("  + {}", w.relname);
+        }
     }
     for r in &plan.removes {
         println!("  - {}", r.relname);
