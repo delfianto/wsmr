@@ -100,12 +100,11 @@ formally owned.
 
 ### Why doesn't a real display-manager login hit this?
 
-This host's actual greeter is `greetd` running `noctalia-greeter-session` —
-`sddm.service` doesn't even exist on this system. The likely reason a
-normal greeter-mediated login never sees the kmscon conflict: `greetd`
-owns VT1 directly via its own service configuration (`vt: Specific(1)`),
-rather than switching to an unused VT and letting `logind` decide what to
-spawn there on demand. The generic
+This host's actual greeter is `greetd` running `noctalia-greeter-session`.
+The likely reason a normal greeter-mediated login never sees the kmscon
+conflict: `greetd` owns VT1 directly via its own service configuration
+(`vt: Specific(1)`), rather than switching to an unused VT and letting
+`logind` decide what to spawn there on demand. The generic
 `autovt@`→`kmsconvt@` aliasing only fires for a VT that's being switched to
 and doesn't already have a claimed console — which never happens to VT1
 under `greetd`'s own config. **This is a reasoned inference from confirmed
