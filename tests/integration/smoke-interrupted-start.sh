@@ -8,7 +8,7 @@
 # least some iterations land during generation/reload/exec and some land
 # elsewhere in the sequence -- and asserts the actual invariant that matters
 # (session::state's documented design: "a fresh generation always resolves
-# any abandoned prior state first", see docs/fix-plan.md P0-04/P1-02):
+# any abandoned prior state first" -- see that module's own doc comment):
 # regardless of exactly when 'wsmr start' gets killed, the account must be
 # left in a state where the *next* clean 'wsmr start' still succeeds with no
 # manual cleanup. That's a stronger property test than hitting one exact

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Real-hardware Tier-B harness for fix-plan.md's Phase 7 (P7-02): a
-# disposable-user, real-compositor session, verified the same way every
-# other tier in this repo is - real scripted assertions with a real exit
+# Real-hardware harness for the disposable-user, real-compositor session
+# (see arch/README.md for setup), verified the same way every other tier in
+# this repo is - real scripted assertions with a real exit
 # code, not a transcript of commands someone ran by hand once.
 #
 # Three stages, matching P7-02 exactly, run as root from a login shell that
@@ -288,7 +288,7 @@ run_post_logout() {
     else
         u systemctl --user show-environment > "$STATE_DIR/post-logout-environment.txt" 2>&1
 
-        # Confirmed root cause (docs/fix-plan.md Phase 7 evidence): a real bug
+        # Confirmed root cause (see docs/known-issues.md): a real bug
         # in the Hyprland binary's own embedded shutdown command re-exports
         # these vars' stale values from its own process env in the same
         # breath it unsets them, regardless of how the session ends. Not a
@@ -305,7 +305,7 @@ run_post_logout() {
             name=${line%%=*}
             case " $KNOWN_HYPRLAND_LEAKS " in
                 *" $name "*)
-                    echo "KNOWN ISSUE (not wsmr's fault - see docs/fix-plan.md Phase 7): $line still set" ;;
+                    echo "KNOWN ISSUE (not wsmr's fault - see docs/known-issues.md): $line still set" ;;
                 *)
                     UNEXPECTED="$UNEXPECTED
 $line" ;;

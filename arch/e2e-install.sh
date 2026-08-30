@@ -17,8 +17,7 @@
 # What it deliberately does NOT do — the rest of arch/README.md's setup, on
 # purpose: create the disposable test user, write that user's Hyprland
 # config, touch /usr/bin/wsmr or the primary user's account, or run any part
-# of the actual verification harness (see docs/fix-plan.md's Phase 7 for
-# what that still needs).
+# of the actual verification harness (see scripts/e2e-harness.sh for that).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,5 +50,5 @@ cat <<EOF
     Installed binary: $DEST_DIR/wsmr
     Session entry:    $SESSION_DIR/wsmr-e2e.desktop
     Next: arch/README.md's disposable-user and Hyprland-config steps,
-    then docs/fix-plan.md's Phase 7 checklist.
+    then scripts/e2e-harness.sh prepare/verify/post-logout.
 EOF

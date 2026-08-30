@@ -60,7 +60,7 @@ package() {
 	install -Dm0755 target/release/wsmr "$pkgdir/usr/bin/wsmr"
 	install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 	install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-	install -Dm0644 docs/fix-plan.md "$pkgdir/usr/share/doc/$pkgname/fix-plan.md"
+	install -Dm0644 TODO.md "$pkgdir/usr/share/doc/$pkgname/TODO.md"
 	install -Dm0644 docs/architecture.md "$pkgdir/usr/share/doc/$pkgname/architecture.md"
 	install -Dm0644 docs/known-issues.md "$pkgdir/usr/share/doc/$pkgname/known-issues.md"
 	# See arch/session/hyprland-wsmr.desktop's own header for why this is
