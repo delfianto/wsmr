@@ -11,6 +11,18 @@
 # original Phase 4 work.
 set -euo pipefail
 
+# Force plain output from every systemd tool this script calls: journalctl
+# colorizes elevated-priority lines (systemd logs a unit's own "Failed with
+# result" line at LOG_WARNING, unlike its routine LOG_INFO state-transition
+# lines) whenever it thinks its output is going to a color-capable
+# terminal -- which can happen even through a pipe, depending on how the
+# calling environment's own stdout is set up (observed: a plain-substring
+# grep against exactly that one elevated-priority line failed consistently
+# on GitHub-hosted runners, every single retry across a 6s window, while an
+# adjacent grep against a routine info-level line in the same journal
+# succeeded immediately -- never reproduced locally).
+export SYSTEMD_COLORS=0
+
 WSMR="${WSMR:-/opt/wsmr-target/debug/wsmr}"
 STUB="${STUB:-/opt/it/stub-compositor-badnotify.sh}"
 
