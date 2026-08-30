@@ -57,12 +57,16 @@ verification command or evidence in the phase's evidence section.
 - [~] **G2 — Credible Tier B:** Phase 4's happy path and its two implemented
   failure scenarios (duplicate start, stop-when-stopped) pass with zero
   ignored functional failures — see Phase 4 evidence for the full PASS list
-  and the real bugs this caught along the way. **Not fully closed**: 6 of
-  P4-03's 9 failure/recovery scenarios are explicitly deferred (compositor
-  exits before readiness, readiness timeout, prepare-env failure, interrupted
-  start/generation, finalize partial failure, cleanup after an unclean
-  compositor exit) — each needs its own broken-fixture variant and container
-  boot, cut for wall-clock budget reasons, not attempted-and-failed.
+  and the real bugs this caught along the way. **Extended 2026-08-30**: 3
+  more P4-03 scenarios landed and independently re-confirmed passing
+  (compositor exits before readiness, readiness timeout, cleanup after an
+  unclean compositor exit — `scripts/linux-integration-failures.sh`), and
+  the existing happy-path smoke was re-run to confirm it's unregressed (all
+  19 `PASS:` lines). **Still not fully closed**: 3 of P4-03's 9
+  failure/recovery scenarios remain explicitly deferred (prepare-env
+  failure, interrupted start/generation, finalize partial failure) — each
+  needs its own broken-fixture variant and container boot, cut for
+  wall-clock budget reasons, not attempted-and-failed.
 - [~] **G3 — Real machine:** Phase 7 passes under a disposable CachyOS user
   before claiming CachyOS/Wayland/Hyprland runtime support. **Substantial
   partial evidence as of 2026-08-29** (see Phase 7 evidence): a real
@@ -921,17 +925,47 @@ Findings:
 
 ### P4-03 Cover failure and recovery paths
 
-- [ ] Compositor exits before readiness. Not implemented — needs a second
-  stub-compositor variant and its own container boot; deferred (see below).
-- [ ] Readiness timeout. Same reason as above.
-- [ ] prepare-env failure. Same reason as above.
+- [x] Compositor exits before readiness. **Implemented 2026-08-30**
+  (`scripts/linux-integration-failures.sh crash-before-readiness`,
+  `tests/integration/{smoke-crash-before-readiness,stub-compositor-crash}.sh`):
+  a stub that `exit 17`s before creating a socket. Journal confirms the real
+  crash (`exit 17`, `Result=exit-code`) — not the unit's live `ActiveState`,
+  which isn't reliably queryable in the ~1s window before the
+  `OnFailure=wayland-session-shutdown.target` cascade tears the instance
+  back down. Also asserts `graphical-session.target`/`WAYLAND_DISPLAY` never
+  activate, the rest of the pre-readiness graph tears itself down, and the
+  activation environment is restored byte-identical to the pre-session
+  baseline. Confirmed independently (re-run outside the implementing
+  session, not just taken on the original report): `PASSED`. **Notable,
+  non-wsmr-specific finding recorded in the script itself**: `wsmr start`
+  exits 0 even here — confirmed byte-identical to real uwsm 0.26.7's
+  `libexec/signal-handler.sh` (diffs clean except an attribution comment);
+  `start`'s exit code reflects the start+shutdown *job* completing, not
+  session success — failure detection is meant to happen via unit-graph
+  state (which is exactly what this scenario asserts), matching upstream's
+  actual design.
+- [x] Readiness timeout. **Implemented 2026-08-30**
+  (`scripts/linux-integration-failures.sh readiness-timeout`,
+  `tests/integration/{smoke-readiness-timeout,stub-compositor-hang}.sh`): a
+  stub that opens a real socket but never exports `WAYLAND_DISPLAY`, paired
+  with `UWSM_WAIT_VARNAMES_TIMEOUT=2` so `wayland-session-waitenv.service`
+  times out in seconds instead of the real 30s default. Asserts (via
+  journal, same reliability reasoning as above) that `waitenv` names the
+  missing variable rather than failing generically,
+  `graphical-session.target` never activates, the hung compositor and its
+  `socat` child are torn down by the shutdown cascade, and the environment
+  is restored. Confirmed independently: `PASSED`.
+- [ ] prepare-env failure. Not implemented — cut for wall-clock budget (see
+  the scope note below); each scenario built this pass already took
+  multiple container-boot debug iterations.
 - [x] Duplicate start. Asserted: a second `wsmr start` while a session is
   active fails, its stderr mentions "already active", and the *original*
   compositor unit is still active afterward (the refusal doesn't disturb the
   running session).
 - [x] Stop when already stopped. Asserted: `wsmr stop` after a clean stop
   still exits 0 (a documented no-op, not an error).
-- [ ] Interrupted start/generation. Not implemented — same reason.
+- [ ] Interrupted start/generation. Not implemented — same wall-clock-budget
+  reason.
 - [ ] Finalize partial failure. Not implemented — same reason.
 - [x] App-daemon missing reader or stale FIFO. "Missing reader" is covered at
   the integration level: `smoke.sh` sends `ping` without reading the reply,
@@ -944,18 +978,29 @@ Findings:
   (`app::daemon::tests::create_fifo_makes_and_reuses_fifo`, which also
   exercises the "stale plain file at the FIFO path gets replaced" case), so
   the gap is real but narrower than the checkbox implies.
-- [ ] Cleanup after an unclean compositor exit. Not implemented — same
-  reason.
+- [x] Cleanup after an unclean compositor exit. **Implemented 2026-08-30**
+  (`scripts/linux-integration-failures.sh unclean-exit`,
+  `tests/integration/smoke-unclean-exit.sh`): starts a normal session,
+  waits for readiness, then `SIGKILL`s the compositor's `MainPID` directly
+  — `wsmr stop` is never called. Asserts the graph tears itself down anyway
+  via the unit graph's own `OnSuccess=`/`OnFailure=` wiring
+  (`graphical-session.target` inactive, `socat` child gone,
+  `WAYLAND_DISPLAY` unset), that a subsequent `wsmr stop` is still a clean
+  no-op, and that the environment/failed-units/stale-runtime-state checks
+  all come back clean. Confirmed independently: `PASSED`.
 
-**Scope note on the six unimplemented P4-03 scenarios:** each needs either a
-deliberately-broken stub-compositor variant, a way to kill the compositor
-mid-lifecycle from outside its own unit, or its own container boot to avoid
-one broken scenario corrupting the systemd state the next scenario in the
-same run depends on. Given the real wall-clock cost of iterating on full
-Podman systemd-as-PID-1 boots (each of the ~10 debugging iterations this
-phase actually took was several minutes), building out all six was cut from
-this pass as a pragmatic budget decision, not attempted-and-failed. The two
-implemented (duplicate start, stop-when-stopped) were chosen as the
+**Scope note on the three still-unimplemented P4-03 scenarios** (prepare-env
+failure, interrupted start/generation, finalize partial failure): each needs
+either a deliberately-broken stub-compositor variant, a way to kill the
+compositor mid-lifecycle from outside its own unit, or its own container
+boot to avoid one broken scenario corrupting the systemd state the next
+scenario in the same run depends on. Given the real wall-clock cost of
+iterating on full Podman systemd-as-PID-1 boots (each debugging iteration
+takes several minutes, both for the original duplicate-start/stop-when-
+stopped pair and for the three scenarios added 2026-08-30), building out the
+remaining three was cut from this pass as a pragmatic budget decision, not
+attempted-and-failed. The five now implemented (duplicate start,
+stop-when-stopped, plus the three added 2026-08-30) were chosen as the
 cheapest to add correctly without new fixtures or container-state risk.
 Left as explicit follow-up work, not silently dropped.
 
@@ -1000,16 +1045,26 @@ Phase 4 evidence:
   product) were caught as hard failures during development of this phase,
   itself evidence the smoke test fails on real breakage rather than passing
   through it.
+- [x] **2026-08-30 extension**: 3 more scenarios implemented
+  (`scripts/linux-integration-failures.sh`, commit `fabd360`) — compositor
+  exits before readiness, readiness timeout, cleanup after an unclean
+  compositor exit. Independently re-run (not just taken on the implementing
+  agent's report): all three `PASSED`, and the unmodified
+  `scripts/linux-integration.sh` happy path was re-run alongside them and
+  still shows all 19 `PASS:` lines — confirms no regression. 3 of 9 P4-03
+  scenarios remain deferred (prepare-env failure, interrupted
+  start/generation, finalize partial failure).
 - [x] Collected artifact location: local only — `scripts/linux-integration.sh`
   output captured to the session scratchpad during iteration; not persisted
   to the repo or CI (no CI runner available from this environment, same
   caveat as Phase 6's `msrv` job).
 
-G2 is now met for everything this phase actually covers: Phase 4 passes
-without ignored functional failures for the happy path and for the two
-implemented failure scenarios. It is **not** met for the six deferred P4-03
-scenarios — those remain open, tracked above rather than folded into a
-blanket "G2 closed" claim.
+G2 is now met for everything Phase 4 itself covered: passes without ignored
+functional failures for the happy path and for the two implemented failure
+scenarios. (P4-03 gained 3 more scenarios on 2026-08-30, closing more of the
+original 6-scenario gap — see P4-03 and the G2 gate above for current
+status.) It is **not** met for the scenarios still deferred — those remain
+open, tracked above rather than folded into a blanket "G2 closed" claim.
 
 ---
 
@@ -1840,8 +1895,20 @@ part of verifying wsmr's real-world app-launch behavior.
 ### P7-04 Exercise live failure recovery
 
 - [ ] Test a compositor configuration error before readiness. Not tested.
-- [ ] Test a compositor crash after readiness. Not tested.
-- [ ] Test login cancellation/forced termination. Not tested.
+  Three analogous scenarios were instead covered at the Tier-B container
+  level on 2026-08-30 (see P4-03: compositor exits before readiness,
+  readiness timeout, unclean exit) — real evidence, but a container's
+  stub compositor, not this account's real Hyprland on real hardware.
+- [ ] Test a compositor crash after readiness. Not tested on real hardware
+  (see note above — the Tier-B "unclean exit" scenario is the closest
+  analog that does exist). A 2026-08-30 attempt specifically on the
+  disposable `wsmr` account was blocked: it requires root
+  (`sudo -u wsmr ...`, per `scripts/e2e-harness.sh`'s own design) to reach
+  that account's user manager/D-Bus bus, and the sandboxed environment that
+  attempt ran in had no passwordless `sudo`. Not retried from a session with
+  broader privileges — genuinely open, not a hard blocker in general.
+- [ ] Test login cancellation/forced termination. Not tested, same `sudo`
+  constraint as above.
 - [~] Verify the account can subsequently start a fresh wsmr session. Not a
   *designed* scenario, but real, live evidence landed anyway: mid-session,
   the unrelated stale `/usr/local/bin/wsmr` binary (see P7-01) was deleted
@@ -1861,9 +1928,26 @@ part of verifying wsmr's real-world app-launch behavior.
 
 ### Recovery procedure requirements
 
-- [ ] Not written. Today's recovery from the stuck kmscon-conflicted session
-  was done manually and interactively (`wsmr stop` as the disposable user,
-  then a fresh attempt on a different VT), not via a scripted procedure.
+- [~] Not written as a standalone document, but the 2026-08-30 Tier-B
+  scenarios (P4-03) now give a real, evidence-backed answer for the
+  container-verified failure modes: **no manual recovery procedure is
+  needed** for a crashed/hung/unclean-killed compositor. In all three cases
+  (crash before readiness, readiness timeout, `SIGKILL`ed mid-session), the
+  unit graph's own `OnSuccess=`/`OnFailure=wayland-session-shutdown.target`
+  wiring tears the whole graph down on its own — no stuck units, no stale
+  runtime state, no manual `systemctl --user reset-failed` required before
+  the next `wsmr start`. One caveat found and documented directly in
+  `smoke-crash-before-readiness.sh`/`smoke-readiness-timeout.sh`: retrying
+  *immediately* (within the same wall-clock second) after a crash can
+  transiently race `xdg-desktop-autostart.target`'s own
+  `StopWhenUnneeded=yes` against the still-settling shutdown cascade —
+  waiting even briefly (which a human retrying manually always does anyway)
+  avoids it; a control run of the unmodified happy path confirms this
+  doesn't happen in ordinary (non-rapid-retry) use. 2026-08-29's kmscon
+  recovery and the stale-binary self-heal (P7-04 above) remain the only
+  real-hardware recovery evidence; both were still manual/interactive, not
+  scripted. Not written as a document a human could follow step-by-step —
+  that's the part still actually missing.
 
 Acceptance criteria:
 
