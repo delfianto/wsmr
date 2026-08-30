@@ -84,8 +84,12 @@ echo "== asserting the compositor unit itself ended up failed, not stuck 'activa
 # force a sync instead of guessing at a timeout.
 journalctl --user --sync 2>/dev/null || sudo journalctl --sync 2>/dev/null || true
 FAILED_OK=0
+ATTEMPT=0
 for _ in $(seq 1 20); do
-    if journalctl --user -n 500 --no-pager 2>/dev/null | grep -qE "wayland-wm@.*\.service: Failed with result"; then
+    ATTEMPT=$((ATTEMPT + 1))
+    MATCH_COUNT=$(journalctl --user -n 500 --no-pager 2>/dev/null | grep -cE "wayland-wm@.*\.service: Failed with result" || true)
+    echo "---- attempt $ATTEMPT: match count = $MATCH_COUNT ----" >&2
+    if [ "$MATCH_COUNT" -gt 0 ]; then
         FAILED_OK=1
         break
     fi
@@ -94,8 +98,10 @@ done
 if [ "$FAILED_OK" -ne 1 ]; then
     echo "---- diagnostic: unit status (may already be collected) ----" >&2
     systemctl --user status 'wayland-wm@*.service' --no-pager -l >&2 || true
-    echo "---- diagnostic: all journal lines mentioning wayland-wm@ ----" >&2
-    journalctl --user -n 500 --no-pager 2>/dev/null | grep -E "wayland-wm@" >&2 || true
+    echo "---- diagnostic: raw bytes around wayland-wm@ lines (cat -A reveals hidden chars) ----" >&2
+    journalctl --user -n 500 --no-pager 2>/dev/null | grep -E "wayland-wm@" | cat -A >&2 || true
+    echo "---- diagnostic: journalctl -o json for the same lines (bypasses any formatting entirely) ----" >&2
+    journalctl --user -n 500 -o json --no-pager 2>/dev/null | grep -F '"MESSAGE"' | grep -F "wayland-wm@" >&2 || true
     fail "wayland-wm@ never recorded a Failed result -- may be stuck instead of cleanly failing"
 fi
 echo "PASS: wayland-wm@ recorded a clean Failed result, not an indefinite hang"
