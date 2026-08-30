@@ -355,6 +355,20 @@ starting point (exactly the "no true pre-start baseline" caveat flagged at
 the time) — this pass hit that same contamination on its first cycle,
 which is what motivated re-running it from a verified-clean baseline.
 
+**Correction (2026-08-30): the "wsmr's own handling" attribution above is
+precise for three of the four, not `XDG_BACKEND`.** Checked directly
+against the current source: `XDG_CURRENT_DESKTOP`, `XDG_MENU_PREFIX`, and
+`XDG_SESSION_DESKTOP` are all explicitly in `varnames::ALWAYS_CLEANUP_BASE`
+(`src/varnames.rs`), which `always_cleanup()` scrubs on every clean `wsmr
+stop` — that part holds up exactly as described. `XDG_BACKEND` does not
+appear anywhere in `varnames.rs`, nor in Hyprland's own embedded
+`import-environment`/`dbus-update-activation-environment` strings
+documented above. Its real origin is still genuinely unknown; grouping it
+with the other three here was an overgeneralization from a shared "all
+four appeared in the same test run" observation, not a verified shared
+mechanism. Doesn't change the practical conclusion (wsmr isn't leaking it,
+whatever the source), just the precision of the explanation.
+
 Upstream `uwsm` does not currently set `HYPRLAND_NO_SD_VARS` either
 (checked against its current source), so a real uwsm session still hits
 the original bug today; this is a wsmr/user-side mitigation, not something
