@@ -61,11 +61,18 @@ fi
 echo "PASS: journal confirms finalize's notify step actually ran and failed, killing the compositor's own process"
 
 echo "== asserting the compositor unit itself ended up failed, not stuck 'activating' =="
-if journalctl --user -n 500 --no-pager 2>/dev/null | grep -qE "wayland-wm@.*\.service: Failed with result"; then
-    :
-else
-    fail "wayland-wm@ never recorded a Failed result -- may be stuck instead of cleanly failing"
-fi
+# journald indexing can lag; retry briefly rather than treating that lag as a
+# real failure, same as every other journal-based check in this file.
+FAILED_OK=0
+for _ in $(seq 1 10); do
+    if journalctl --user -n 500 --no-pager 2>/dev/null | grep -qE "wayland-wm@.*\.service: Failed with result"; then
+        FAILED_OK=1
+        break
+    fi
+    sleep 0.5
+done
+[ "$FAILED_OK" -eq 1 ] \
+    || fail "wayland-wm@ never recorded a Failed result -- may be stuck instead of cleanly failing"
 echo "PASS: wayland-wm@ recorded a clean Failed result, not an indefinite hang"
 
 echo "== asserting the session never reached full readiness (graphical-session.target) =="
