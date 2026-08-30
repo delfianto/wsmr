@@ -1544,18 +1544,44 @@ the dated findings inside P7-03 below.
   same Hyprland binary.
 
   **`XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX` root cause not
-  pinned down.** None of these three appear in the Hyprland import/export
-  command above, so that specific mechanism doesn't explain them (though
-  `XDG_MENU_PREFIX=hyprland-` still looks Hyprland-authored, just via some
-  other path not yet found). More importantly: **no true pre-`wsmr start`
-  baseline was captured for this real-hardware run** — only a mid-session
-  ("pre-stop") snapshot was compared against post-stop, unlike Phase 4's
-  Tier-B smoke test, which does capture a real pre-start baseline. It's
-  possible one or more of these three predates `wsmr start` entirely (e.g.
-  set by the login process itself via PAM for a `tty`-class session) and
-  was never wsmr's or Hyprland's to clean up in the first place — genuinely
-  unknown either way from today's evidence. A repeat run capturing a real
-  pre-start baseline would resolve this cleanly.
+  pinned down (2026-08-29).** None of these three appear in the Hyprland
+  import/export command above, so that specific mechanism doesn't explain
+  them (though `XDG_MENU_PREFIX=hyprland-` still looks Hyprland-authored,
+  just via some other path not yet found). More importantly: **no true
+  pre-`wsmr start` baseline was captured for this real-hardware run** — only
+  a mid-session ("pre-stop") snapshot was compared against post-stop, unlike
+  Phase 4's Tier-B smoke test, which does capture a real pre-start baseline.
+  It's possible one or more of these three predates `wsmr start` entirely
+  (e.g. set by the login process itself via PAM for a `tty`-class session)
+  and was never wsmr's or Hyprland's to clean up in the first place —
+  genuinely unknown either way from today's evidence. A repeat run capturing
+  a real pre-start baseline would resolve this cleanly.
+
+  **Resolved, non-destructively, 2026-08-30 on the primary `geist`
+  account.** `systemctl show user@1000.service -p ActiveEnterTimestamp` →
+  `Fri 2026-08-28 20:52:43` — the systemd **user manager itself** (the
+  process holding the activation-environment dictionary
+  `systemctl --user show-environment` reads) has been running continuously
+  since two days before this investigation, and before the very first
+  `wsmr start` attempt on this account. `XDG_SESSION_DESKTOP=Hyprland`,
+  `XDG_BACKEND=wayland`, and `XDG_MENU_PREFIX=arch-` (the live value today —
+  not `hyprland-` as guessed on 2026-08-29) are present in that long-lived
+  manager's environment, but none of the three appear in `varnames.rs`'s
+  `SESSION_SPECIFIC` list, Hyprland's own literal `import-environment`/
+  `unset-environment` strings, or `/etc/pam.d/greetd`'s session stack in any
+  form that would export them into the *manager's* activation environment
+  specifically (as opposed to the login session's own process environment,
+  a different store). Combined, this places their origin before any
+  wsmr-managed session in this manager's multi-day lifetime — most likely
+  set by whichever session ran first after this manager started (this
+  account's normal daily driver is uwsm-managed) — and confirms nothing in
+  wsmr's start/stop lifecycle is responsible for exporting or restoring
+  them. **Conclusion: not a wsmr defect** — wsmr correctly restores 100% of
+  what it itself exports; these three were never wsmr's (or, per the
+  evidence here, Hyprland's) to clean up. Downgraded from "root cause not
+  pinned down" accordingly; the *other* two vars (`WAYLAND_DISPLAY`,
+  `XDG_CURRENT_DESKTOP`) remain a confirmed Hyprland-binary bug, unaffected
+  by this finding.
 
   This is a real difference from Phase 4's Tier-B smoke test, where the
   stub compositor explicitly calls `wsmr finalize` itself and the full
