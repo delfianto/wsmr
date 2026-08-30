@@ -45,6 +45,20 @@ jobs:
       - name: test
         run: just test
 
+  tier-b:
+    name: tier-b (systemd-as-PID-1 integration, informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Run Tier-B integration smoke
+        run: bash scripts/linux-integration.sh
+
   msrv:
     name: msrv (rust-version from Cargo.toml)
     runs-on: ubuntu-latest
