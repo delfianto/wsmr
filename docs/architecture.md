@@ -25,7 +25,14 @@ and gets out of the way. Concretely, that means:
   writes (see `src/units/manifest.rs`) so it can tell its own generated
   files apart from a foreign file that happens to share a name (e.g. a
   hand-written drop-in, or one written by a coexisting uwsm install). It
-  refuses to overwrite or delete anything it doesn't recognize as its own.
+  refuses to overwrite or delete anything it doesn't recognize as its own —
+  *except* the per-compositor `50_custom.conf`/tweak drop-ins (never the
+  static graph itself), which `start` reclaims automatically once it has
+  independently confirmed via systemd that no session is currently active:
+  those specific paths are only ever machine-written, so an unrecognized
+  file there is leftover state from a previous uwsm/wsmr session, not
+  something a person edited by hand. `session::log_notice_to_journal` reports
+  what got reclaimed so it's never silent, just not a hard stop.
 - **Side effects are isolated behind small traits/wrappers** (`src/sysd/dbus.rs`
   wraps `zbus`; process spawns go through `std::process::Command`) so the
   logic layered on top — unit rendering, the env-delta set-algebra, CLI

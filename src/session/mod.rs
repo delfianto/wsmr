@@ -41,11 +41,24 @@ pub fn notify_error(summary: &str, body: &str) {
 /// with no trace anywhere. Failures to log are ignored: this is a
 /// best-effort diagnostic aid, not part of the session's correctness.
 pub fn log_error_to_journal(msg: &str) {
+    log_to_journal(msg, "err");
+}
+
+/// Same as [`log_error_to_journal`] but at `notice` priority, for
+/// non-fatal, informational pre-exec messages (e.g. `start()` silently
+/// adopting stale foreign drop-ins — see
+/// `crate::units::plan::GenerationPlan::reclaimed`) that would otherwise be
+/// just as invisible under a greetd-launched session as an actual error.
+pub fn log_notice_to_journal(msg: &str) {
+    log_to_journal(msg, "notice");
+}
+
+fn log_to_journal(msg: &str, priority: &str) {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
     let Ok(mut child) = Command::new("systemd-cat")
-        .args(["--identifier=wsmr", "--priority=err"])
+        .args(["--identifier=wsmr", &format!("--priority={priority}")])
         .stdin(Stdio::piped())
         .spawn()
     else {
