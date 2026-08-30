@@ -1116,8 +1116,10 @@ Phase 4 evidence:
   named scenarios are now implemented.
 - [x] Collected artifact location: local only — `scripts/linux-integration.sh`
   output captured to the session scratchpad during iteration; not persisted
-  to the repo or CI (no CI runner available from this environment, same
-  caveat as Phase 6's `msrv` job).
+  to the repo or CI. This one's accurate as stated: Tier B genuinely isn't
+  wired into CI at all yet (see P6-02), unlike the `msrv` job's caveat
+  elsewhere in this document, which was wrong and has been corrected — CI
+  access itself was never the issue.
 
 **G2 is now fully met**: Phase 4's happy path plus all 9 of P4-03's named
 failure/recovery scenarios pass with zero ignored functional failures (see
@@ -1362,15 +1364,16 @@ Finding: `Cargo.toml`, README, and repository guidance disagree on Rust/MSRV.
   `rust-version` out of `Cargo.toml` itself (so the two can't drift apart —
   no second hardcoded version number to forget), pins `dtolnay/rust-toolchain`
   to exactly that, and runs `cargo build`/`cargo test --all-targets --locked`.
-  **Caveat, stated plainly:** this workflow could not be executed from this
-  environment — no way to trigger or observe a real GitHub Actions run here.
-  It's syntax-validated (`python3 -c "import yaml; yaml.safe_load(...)"`,
-  clean) and its `sed` MSRV-extraction line was run directly against the
-  real `Cargo.toml` (correctly prints `1.98.0`), and the build/test commands
-  it runs are the exact ones verified locally above — but "added and as
-  carefully checked as possible from here" is not the same as "confirmed
-  green on GitHub's infrastructure." Worth an actual CI run before trusting
-  it blindly.
+  **The "could not be executed from this environment" caveat originally
+  written here was wrong — corrected 2026-08-30.** `gh auth status` shows
+  this environment has had authenticated `gh` access (`repo`+`workflow`
+  scopes) the whole time; `gh run list` shows the `msrv` job has run for
+  real on every push to `main` since it was added, with **zero failures
+  across all 83 runs fetched**. Confirmed directly via `gh run view
+  33303513565 --job=99235852931 --log`: `toolchain: 1.98.0` (exactly
+  `Cargo.toml`'s pin), `cargo build`/`cargo test --all-targets --locked`
+  both succeed on GitHub's actual hosted runners. Not a local-only claim —
+  genuinely confirmed green on GitHub's infrastructure.
 - [x] Align `Cargo.toml`, README, and repository guidance. `Cargo.toml` was
   already correct (the source of truth). Fixed README.md ("rustc ≥ 1.85;
   developed on 1.95" → "rustc ≥ 1.98.0 ... enforced by CI's MSRV job") and
@@ -1391,7 +1394,12 @@ Finding: `Cargo.toml`, README, and repository guidance disagree on Rust/MSRV.
   supported. Not done, same reason — Tier B needs Phase 4's hardening
   *before* it's trustworthy enough to gate anything on, in CI or otherwise.
   Wiring a known-unreliable test into CI now would be the exact failure mode
-  this whole review exists to fix.
+  this whole review exists to fix. **Precondition now met, 2026-08-30**:
+  Phase 4/P4-03 is fully hardened (all 9 named scenarios implemented and
+  independently verified — see G2). The remaining work is now purely "wire
+  it into CI" (a new job, plus checking whether GitHub-hosted runners
+  actually support the privileged/rootful container Tier B needs), not
+  "wait for Tier B to be trustworthy" — genuinely unattempted, not blocked.
 - [x] If hosted CI cannot support it reliably, add scheduled/manual execution
   and publish its status/artifacts without claiming per-commit coverage.
   Interpreted "cannot support it reliably" as also covering "the test itself
@@ -1445,17 +1453,19 @@ Finding: `Cargo.toml`, README, and repository guidance disagree on Rust/MSRV.
 
 Acceptance criteria:
 
-- [~] A new contributor can reproduce every advertised verification tier.
-  Every tier's exact command is now documented (README + `AGENTS.md`) and
-  every command shown was actually run this session except triggering the
-  new CI workflow itself (can't, from here — see P6-01's caveat).
+- [x] A new contributor can reproduce every advertised verification tier.
+  Every tier's exact command is documented (README + `AGENTS.md`); the CI
+  workflow itself has also now actually been triggered and observed for
+  real (2026-08-30, see below), not just documented.
 - [x] Badges and README claims match workflow definitions. The one existing
   badge (`ci.yml`) matches; README's CI-behavior claims were rewritten to
   match `ci.yml`'s real steps line-for-line rather than paraphrasing from
   memory.
-- [~] The selected MSRV job passes from a clean checkout. Passes *locally*
-  at the pinned version (this host's toolchain already is 1.98.0); the
-  actual GitHub Actions job has not been run — see P6-01.
+- [x] The selected MSRV job passes from a clean checkout. **Corrected
+  2026-08-30**: this was previously marked `[~]` on the mistaken belief
+  that GitHub Actions couldn't be reached from here. `gh run list` shows it
+  passing on every push to `main`, with zero failures across all 83 runs
+  fetched (the earliest available in this listing).
 
 Phase 6 evidence:
 
@@ -1463,10 +1473,16 @@ Phase 6 evidence:
   (see P6-01). `cargo build --all-targets --locked --verbose` and
   `cargo test --all-targets --locked` — both pass on `rustc 1.98.0`
   natively and in the Linux container.
-- [~] CI workflow run: not obtained — no GitHub Actions access from this
-  environment. YAML syntax validated locally; the underlying commands
-  verified locally instead (see above). A real push/PR run is still needed
-  before trusting the new `msrv` job.
+- [x] CI workflow run: **corrected 2026-08-30 — this was wrong.** The
+  original entry claimed no GitHub Actions access existed from this
+  environment; `gh auth status` shows authenticated access (`repo`+
+  `workflow` scopes) was available the whole time, and `gh run list`/
+  `gh run view --log` confirm both the `ci` and `msrv` jobs have run for
+  real, successfully, on every push to `main` this entire session — e.g.
+  run `33303513565`, triggered by this session's own last-but-one commit,
+  both jobs green, `msrv`'s log showing `toolchain: 1.98.0` exactly and
+  `cargo test --all-targets --locked` passing on GitHub's actual hosted
+  runners. Not a local-only claim.
 - [x] Documentation review: README.md and `AGENTS.md` (=`CLAUDE.md`) both
   updated; `cargo test` — 234 passed (215 lib + 18 main.rs + 1 new
   integration test, `tests/uwsm_unit_compat.rs`), 0 failed, natively and in
@@ -2136,9 +2152,14 @@ Phase 7 evidence:
   update).
 - [!] `ci: run the Linux integration matrix` — genuinely not done, not a
   stale checkbox: confirmed `.github/workflows/ci.yml` has zero references
-  to Tier A/B as of 2026-08-30. Blocked on P6-02's own deferral (Tier B
-  needs privileged/rootful containers in CI, which this environment can't
-  provide or configure).
+  to Tier A/B as of 2026-08-30. Still blocked on P6-02's own deferral (Tier
+  B needs privileged/rootful containers, and P4-03 wasn't fully hardened
+  until this same day), but **correcting the reason given**: this isn't an
+  access problem — `gh` here has `workflow` scope and could push a change
+  to `ci.yml` — it's unbuilt/unattempted work (a new CI job, and an open
+  question of whether GitHub-hosted runners actually support privileged
+  containers, that nobody has checked yet), not something this environment
+  is structurally barred from.
 - [x] `docs: align support, compatibility, and verification claims` — Phase
   6, not yet committed as of writing this line (commit follows this
   fix-plan update).
@@ -2159,8 +2180,12 @@ document) before being checked off.
   rather than silently passed), but literally not all of them are `[x]`.
   Left `[~]` rather than `[x]` so this line doesn't imply every criterion
   fully closed — see the per-phase sections and the G0–G3 gates for exactly
-  which remain `[~]`/`[!]` and why (mostly structural: no CI access, no
-  second Linux distro, no real interactive VT login available here).
+  which remain `[~]`/`[!]` and why. **Note**: "no CI access" is no longer
+  one of those reasons as of 2026-08-30 (see P6-01/P6-03's corrected
+  entries — `gh` access was available the whole time); the genuine
+  remaining structural gaps are no second Linux distro to test against and
+  no real interactive VT login available here, plus Tier B genuinely not
+  being wired into CI yet (an unbuilt feature, not an access problem).
 - [x] `cargo fmt --check` passes. Re-run 2026-08-30: clean.
 - [x] `cargo clippy --all-targets --all-features -- -D warnings` passes.
   Re-run 2026-08-30: clean.
