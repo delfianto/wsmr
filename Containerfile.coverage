@@ -14,7 +14,7 @@ ENV container=podman
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         systemd systemd-sysv dbus dbus-user-session libpam-systemd \
-        procps iproute2 sudo ca-certificates curl build-essential \
+        procps iproute2 sudo ca-certificates curl build-essential socat \
     && rm -rf /var/lib/apt/lists/* \
     # trim units that are pointless in a container
     && find /etc/systemd/system /lib/systemd/system \
