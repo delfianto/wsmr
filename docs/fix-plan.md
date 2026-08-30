@@ -67,25 +67,39 @@ verification command or evidence in the phase's evidence section.
   (now) via the real `scripts/e2e-harness.sh` P7-02 harness — real
   compositor cgroup/unit match, live `hyprctl monitors` output against real,
   correctly laid-out monitors, a successful `wsmr app` launch, 16/16 checks
-  passing on a live `verify` run. Not closed: no display-manager-mediated
-  login was tested (this system's greeter turned out to be `greetd` +
-  `noctalia-greeter`, not SDDM as originally assumed), P7-04's failure
-  scenarios are still mostly unwritten, and two real findings outside
-  wsmr's own control were found and root-caused — a Hyprland environment-
-  restoration bug and an intermittent third-party app/portal crash-on-
-  teardown issue (see Phase 7 evidence for both).
+  passing on a live `verify` run. **Extended further on 2026-08-30, on the
+  primary user's own `geist` account** (a deliberate departure from Phase
+  7's "not the primary account" prerequisite — see the note at the top of
+  Phase 7 — made because the disposable-account groundwork above had already
+  de-risked the core mechanics): the display-manager-mediated login gap
+  noted below is now closed — `greetd` + `noctalia-greeter`'s
+  `Hyprland (wsmr-managed)` entry was actually picked at the greeter and
+  reached a healthy, fully-up session, after two real bugs it surfaced were
+  found and fixed (commits `ca69d65`, `06fbdf4` — see Phase 7 evidence). The
+  full app-launch surface (Hyprland keybind launches *and* Noctalia v5's own
+  GUI launcher, once configured with `launch_apps_custom_command = "wsmr
+  app -- $CMD"`) was also verified end to end against this real desktop.
+  Still not closed: P7-04's failure scenarios are still mostly unwritten,
+  the Hyprland environment-restoration bug and the intermittent third-party
+  portal crash-on-teardown issue from 2026-08-29 remain (see Phase 7
+  evidence), and no pre/post environment-restoration diff was captured for
+  the 2026-08-30 primary-account run — only unit-graph and app-launcher
+  health were checked there.
 
 ## Current baseline
 
 - Host: CachyOS, Wayland, Hyprland 0.56.2, systemd 261, dbus-broker.
 - The active desktop is managed by uwsm 0.26.7, not wsmr.
 - Formatting, clippy, and build checks pass.
-- Unit tests currently report **234 passing, 0 failing** (215 lib + 18 in the
-  `wsmr` binary's own test target + 1 new integration test comparing
-  generated units against a real uwsm 0.26.7 install, Phase 6) — the 3
-  originally pre-existing host-dependent failures were root-caused and fixed
-  in Phase 3 (an XDG-dirs test-isolation bug and a hardcoded system-bus
-  dependency). Was 166/3 before Phase 0. Verified in both the native CachyOS
+- Unit tests currently report **236 passing, 0 failing** (217 lib + 18 in the
+  `wsmr` binary's own test target + 1 integration test comparing generated
+  units against a real uwsm 0.26.7 install, Phase 6) — the 3 originally
+  pre-existing host-dependent failures were root-caused and fixed in Phase 3
+  (an XDG-dirs test-isolation bug and a hardcoded system-bus dependency).
+  Was 166/3 before Phase 0; the 234→236 lib-test increase on 2026-08-30 is
+  the two new tests covering Phase 7's reclaim-stale fix
+  (`reclaim_stale_adopts_a_foreign_dropin_instead_of_blocking`,
+  `reclaim_stale_never_applies_to_the_static_graph`). Verified in both the native CachyOS
   host and the clean Linux container after every phase, including Phase 2,
   where the container caught a genuinely new host-dependence bug this
   session introduced (see Phase 2 evidence) — the two-environment habit paid
@@ -1329,9 +1343,14 @@ setup script (`arch/e2e-install.sh`), and the session config (wayland-sessions
 entries + Hyprland config notes) P7-01 needs. As of 2026-08-29 it has been run
 for real against a disposable `wsmr` account on the actual target machine —
 see the evidence below for exactly what passed, what didn't, and two new,
-previously-unknown findings it surfaced. P7-02's harness script still doesn't
-exist; today's verification was done by hand, interactively, not via a
-repeatable script.
+previously-unknown findings it surfaced. (Update: P7-02's harness script was
+written and run for real later the same day — see its own section below; this
+paragraph originally said it didn't exist yet, left unedited at the time it
+was written and only corrected now.) On 2026-08-30 the primary `geist`
+account was additionally exercised directly — a departure from this section's
+own "not the primary account" prerequisite, made deliberately once the
+disposable-account run above had already de-risked start/stop/generation; see
+the dated findings inside P7-03 below.
 
 ### P7-01 Prepare an isolated test identity
 
@@ -1375,11 +1394,13 @@ repeatable script.
   with no hand-rolled file needed.
 - [x] Install a separate display-manager session entry named clearly.
   `arch/PKGBUILD` installs `Hyprland (wsmr-managed)`
-  (`/usr/share/wayland-sessions/hyprland-wsmr.desktop`). **Not yet exercised
-  as an actual login path** — see the acceptance-criteria note below; every
-  session today was started by running `wsmr start -e -D Hyprland
-  hyprland.desktop` directly from an already-logged-in shell, not by
-  picking this entry at a greeter.
+  (`/usr/share/wayland-sessions/hyprland-wsmr.desktop`). **Not exercised as
+  an actual login path on 2026-08-29** — every session that day was started
+  by running `wsmr start -e -D Hyprland hyprland.desktop` directly from an
+  already-logged-in shell, not by picking this entry at a greeter. **Closed
+  2026-08-30**: this exact entry was picked at the real `greetd` +
+  `noctalia-greeter` greeter on the primary `geist` account and reached a
+  healthy session — see the dated findings in P7-03.
 - [x] Record package, kernel, systemd, dbus-broker, Hyprland, and wsmr
   versions. `systemd 261.2-1`, `dbus 1.16.2-1.1`, `hyprland 0.56.2-1`,
   `wsmr 0.1.0-1` (`pacman -Q`), kernel `7.2.2-1-cachyos` (`uname -r`).
@@ -1690,6 +1711,79 @@ earlier. Cosmetically confusing if you don't know why, but exactly the
 byte-identical-static-graph coexistence Phase 0 was designed around,
 working as intended.
 
+**New finding (2026-08-30, primary `geist` account): `start()`'s pre-exec
+failures were completely silent under a real greeter-launched session — a
+real, previously-unknown wsmr bug, now fixed.** Checking the journal after
+the primary account's `Hyprland (wsmr-managed)` entry silently dropped back
+to the `noctalia-greeter` greeter (twice, ~23:08) turned up nothing at all
+under the `wsmr` syslog identifier. Root cause: `session::start::run`'s
+pre-exec steps (system-target gate, double-start refusal, unit-generation
+plan, bindpid start, login-env snapshot) return their errors as a plain
+`Result`, which only ever reaches stderr — but a `greetd`-launched session
+has no journal-captured stderr at all (unlike an interactive shell, or
+Phase 7's earlier raw-VT runs, both of which do), so a failure here was
+completely invisible: the session just closed and greetd fell back to the
+greeter with zero trace anywhere. This is a real gap the disposable-account
+work never could have surfaced, since every 2026-08-29 run was started from
+an already-logged-in interactive shell. **Fixed** (commit `ca69d65`): a new
+`session::log_error_to_journal` routes such a failure through a throwaway
+`systemd-cat --identifier=wsmr --priority=err` invocation instead, so it
+reaches the journal regardless of how the session was launched.
+
+**New finding (2026-08-30, primary `geist` account): wsmr's ownership
+conflict refusal hard-blocked starting whenever foreign per-compositor
+drop-ins existed, even with no session live — the literal cause of the
+original bug report, now fixed.** Once the journal fix above made the
+failure visible, it read: `refusing to touch 5 path(s) ... that are not
+verifiably owned by wsmr`, naming `app-@autostart.service.d/slice-tweak.conf`,
+two other tweak drop-ins, and both of `hyprland.desktop`'s
+`wayland-wm-env@`/`wayland-wm@` `50_custom.conf` drop-ins. All five were
+confirmed to be `uwsm`'s own prior generation (a follow-up login via the
+"Hyprland (uwsm-managed)" entry 48 seconds later logged `Units unchanged`
+against those exact paths) — i.e. this account had previously run Hyprland
+via `uwsm`, leaving its drop-ins in place, and `plan_generate`'s
+foreign-content conflict check (P0-03/P0-05) refused to touch them even
+though `refuse_if_active` had *already* independently confirmed, via
+systemd, that no session was currently active. That combination — a
+manifest-ownership check with no knowledge of live systemd state, layered
+under a caller that already knows the live state — is what made switching
+between the uwsm-managed and wsmr-managed session entries always fail the
+second one. **Fixed** (commit `06fbdf4`): `plan_generate` gained a
+`reclaim_stale` parameter; `start::run` passes `true` (safe precisely
+because `refuse_if_active` already ran first), and a foreign per-compositor
+drop-in or tweak is now adopted as an ordinary write — reported via the new
+`GenerationPlan::reclaimed` and logged at `notice` priority
+(`log_notice_to_journal`) rather than blocking the whole plan. The static
+graph units (byte-identical shared infrastructure with uwsm, per P0-05) are
+deliberately excluded from reclaiming and still hard-block on a mismatch —
+new tests `reclaim_stale_adopts_a_foreign_dropin_instead_of_blocking` and
+`reclaim_stale_never_applies_to_the_static_graph` pin down that boundary.
+Verified live immediately after: the same entry, retried, logged `wsmr:
+adopting 5 stale unit override(s) ...` and reached a fully healthy session
+(`graphical-session.target`, `wayland-session@hyprland.desktop.target`,
+`wayland-wm@hyprland.desktop.service` all `active`, `Result=success`).
+
+**New verification (2026-08-30, primary `geist` account): the full
+app-launch surface confirmed end to end, including Noctalia v5's own GUI
+launcher.** Beyond the compositor graph itself, every app-launch path was
+checked against the live session: Hyprland-keybind-launched apps (Dolphin,
+JDownloader via a generic wrapper script) already went through `wsmr app`
+and appeared as correctly-parented `app-Hyprland-<cmd>-<hex>.scope` units
+under `app.slice/app-graphical.slice`, all `active`/`running`/`success`
+with nonzero task counts. Noctalia v5 (beta.10) separately ships its own
+`[shell]` launcher-integration settings
+(`launch_apps_as_systemd_services`/`launch_apps_custom_command`, documented
+at `docs.noctalia.dev/noctalia/configuration/shell/`) — neither was
+previously set, so Noctalia's own built-in GUI launcher was launching apps
+as bare unwrapped children of the shell process, bypassing wsmr entirely.
+Setting `launch_apps_custom_command = "wsmr app -- $CMD"` in
+`~/.local/state/noctalia/settings.toml` (the actual live settings path, not
+`~/.config/noctalia`) fixed this: launching Bruno from Noctalia's launcher
+produced `app-Hyprland-bruno-<hex>.scope`, correctly parented, `active`,
+`Result=success`. Not a wsmr code change — a downstream desktop-shell
+configuration finding, recorded here because it was found and fixed as
+part of verifying wsmr's real-world app-launch behavior.
+
 ### P7-04 Exercise live failure recovery
 
 - [ ] Test a compositor configuration error before readiness. Not tested.
@@ -1720,14 +1814,18 @@ working as intended.
 
 Acceptance criteria:
 
-- [!] A real SDDM login reaches a usable Hyprland desktop. **The premise was
+- [x] A real SDDM login reaches a usable Hyprland desktop. **The premise was
   wrong**: this system's actual display manager is `greetd` running
   `noctalia-greeter-session`, not SDDM — `sddm.service` doesn't even exist
   on this host (`systemctl status display-manager` → `greetd.service`).
   Future wording should say "a real display-manager login," not name SDDM
-  specifically. Reached a working session today via a raw VT + manual
-  `wsmr start` (after working around the kmscon conflict above), not yet
-  via an actual greeter-mediated login.
+  specifically. On 2026-08-29, reached a working session via a raw VT +
+  manual `wsmr start` (after working around the kmscon conflict above), not
+  via an actual greeter-mediated login. **Closed on 2026-08-30**: the
+  `Hyprland (wsmr-managed)` entry was picked at the real `greetd` +
+  `noctalia-greeter` greeter on the primary `geist` account and reached a
+  fully healthy session — see the dated findings in P7-03 (two real bugs
+  were found and fixed to get there).
 - [~] All P7-03 assertions pass. 8 of 11 confirmed clean, 1 explicitly
   deferred (D-Bus fixture), 1 partially substituted (real autostart apps
   instead of a custom marker), 1 found genuinely incomplete (environment
@@ -1752,9 +1850,16 @@ Acceptance criteria:
 
 Phase 7 evidence:
 
-- [x] Test date and versions: 2026-08-29; systemd 261.2-1, dbus 1.16.2-1.1,
+- [x] Test date and versions: 2026-08-29 (disposable `wsmr` account), extended
+  2026-08-30 (primary `geist` account); systemd 261.2-1, dbus 1.16.2-1.1,
   hyprland 0.56.2-1, wsmr 0.1.0-1 (`pacman -Qi wsmr`), kernel
-  7.2.2-1-cachyos.
+  7.2.2-1-cachyos, noctalia 5.0.0-beta.10-1.1.
+- [x] 2026-08-30 fix commits: `ca69d65` (surface `start()`'s pre-exec
+  failures to the journal) and `06fbdf4` (reclaim stale foreign drop-ins
+  instead of hard-blocking start) — both verified live immediately after
+  landing (see the dated findings in P7-03), plus `cargo test`/`clippy
+  --all-targets --all-features -- -D warnings`/`fmt --check` all clean for
+  both.
 - [x] Harness invocation: `scripts/e2e-harness.sh {prepare|verify|post-logout}
   --user wsmr`. The earlier checks in this evidence section were run
   manually and interactively before the script existed (kept as-is, marked
