@@ -1,6 +1,4 @@
-//! Readiness waiting: `waitenv` (poll the activation environment) and `waitpid`
-//! (block on a PID via pidfd). Ports `waitenv`/`waitpid` (`main.py:4464`/`:4433`).
-//! See `REFERENCE.md` §4.3/§9.
+//! Readiness waiting: poll the activation environment or block on a pidfd.
 
 use crate::error::{Error, Result};
 use crate::filter;

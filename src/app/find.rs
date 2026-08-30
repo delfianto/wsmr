@@ -1,5 +1,5 @@
-//! Locate desktop entries by id across the XDG data hierarchy. Ports the
-//! discovery in `find_entries` (`main.py:625`): walk `<data_dir>/<subpath>`,
+//! Locate desktop entries by ID across the XDG data hierarchy. Walk
+//! `<data_dir>/<subpath>`,
 //! id = path relative to the data dir with `/` → `-`, first match wins.
 
 use crate::app::entry::DesktopEntry;

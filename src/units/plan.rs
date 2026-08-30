@@ -238,10 +238,11 @@ fn classify_dropin(
     Ok(())
 }
 
-/// Compute a plan removing everything wsmr owns and tracks in `dir`, matching
-/// upstream's `-r` mark filter (`main.py:1933`): `marks: None` removes
+/// Compute a plan removing everything wsmr owns and tracks in `dir` using the
+/// upstream-compatible `-r` mark filter: `marks: None` removes
 /// everything removable; `Some(marks)` removes only entries whose mark (a
-/// compositor id, or `"tweaks"`) is in the list — see [`mark_of`].
+/// compositor id, or `"tweaks"`) is in the list, as determined by the internal
+/// `mark_of` helper.
 ///
 /// Only per-compositor `50_custom.conf` drop-ins and the fixed tweak
 /// drop-ins are ever removed here. The static graph units

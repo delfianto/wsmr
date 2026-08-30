@@ -1,9 +1,8 @@
-//! Variable-name classification sets, ported from uwsm's `Varnames`
-//! (`uwsm/uwsm/main.py:141`).
+//! Variable-name classification sets used by environment preparation.
 //!
 //! These drive which environment variables get exported to / scrubbed from the
 //! systemd and D-Bus activation environments during session bootstrap and
-//! teardown. See `REFERENCE.md` §2.
+//! teardown.
 
 use std::collections::BTreeSet;
 

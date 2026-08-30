@@ -1,7 +1,5 @@
-//! Terminal-emulator resolution + command assembly for `wsmr app -T` and
-//! entries with `Terminal=true`. Ports `find_terminal_entry` (`main.py:3170`)
-//! and the terminal-handling block of `app()` (`:3537`). See `REFERENCE.md`
-//! §13.6.
+//! Terminal-emulator resolution and command assembly for `wsmr app -T` and
+//! desktop entries with `Terminal=true`.
 //!
 //! The not-terminals neg-cache (a perf optimization) is intentionally omitted —
 //! we just scan.

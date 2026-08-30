@@ -1,6 +1,4 @@
-//! Desktop-entry `Exec` handling: value unescaping, the strict tokenizer, and
-//! `%`-field expansion. Ports `entry_expand_str` / `entry_tokenize_exec` /
-//! `gen_entry_args` (`main.py:288`/`:324`/`:2999`). See `REFERENCE.md` §13.
+//! Desktop-entry `Exec` unescaping, tokenization, and field expansion.
 
 use crate::error::{Error, Result};
 
@@ -100,9 +98,8 @@ pub fn tokenize_exec(value: &str) -> Result<Vec<String>> {
     Ok(cmd)
 }
 
-/// Convert a path to a `file://` URL, leaving an already-schemed URL (e.g.
-/// `https://…`) untouched. Ports `path2url` (`main.py:2945`) exactly,
-/// including what it deliberately does *not* do: a relative path is neither
+/// Convert a path to a `file://` URL, leaving an already-schemed URL untouched.
+/// A relative path is neither
 /// rejected nor resolved against the current directory — it's percent-encoded
 /// and prefixed as-is (`file://relative/path`), same as upstream. Callers
 /// that need an absolute URL must resolve the path before calling this.
@@ -114,8 +111,7 @@ pub fn path2url(arg: &str) -> String {
 }
 
 /// Whether `s` starts with a URI scheme (`ALPHA *(ALPHA / DIGIT / "+" / "-" /
-/// ".") ":"`, RFC 3986 §3.1), matching the truthiness of Python's
-/// `urllib.parse.urlparse(s).scheme`. Deliberately permissive like upstream:
+/// ".") ":"`, RFC 3986 §3.1). Deliberately permissive like upstream:
 /// e.g. a relative path component such as `"a:b"` is (mis)classified as
 /// scheme `"a"` in both implementations — replicated for compatibility, not
 /// "fixed", since callers pass whatever a desktop entry's `Exec` produced.
@@ -138,8 +134,7 @@ fn has_uri_scheme(s: &str) -> bool {
     false
 }
 
-/// Percent-encode like Python's `urllib.parse.quote` with its default
-/// `safe="/"`: every byte outside `A-Za-z0-9_.~-` and `/` becomes `%XX`
+/// Percent-encode every byte outside `A-Za-z0-9_.~-` and `/` as `%XX`
 /// (uppercase hex), operating on `arg`'s UTF-8 bytes (so non-ASCII
 /// characters, not just spaces/reserved punctuation, are correctly encoded).
 fn percent_encode(arg: &str) -> String {
@@ -326,9 +321,8 @@ mod tests {
         assert!(tokenize_exec(r#""a $x""#).is_err()); // unescaped $ in quotes
     }
 
-    /// Every reserved character from the spec's unquoted-char set,
-    /// cross-checked against upstream's exact set (`main.py:386`:
-    /// `"\t\n'\\><~|&;$*?#()`"`) — must be rejected unquoted, accepted quoted.
+    /// Every reserved character from the spec's unquoted-character set must
+    /// be rejected unquoted and accepted quoted.
     /// `\t`/`\n` are excluded from the unquoted-reject half: both tokenizers
     /// treat them as plain argument-separating whitespace (checked *before*
     /// the reserved-char rejection), never reaching that branch at all.
@@ -423,10 +417,8 @@ mod tests {
         assert_eq!(path2url("/a/b"), "file:///a/b");
     }
 
-    /// Table-tested against Python's actual
-    /// `f"file://{urllib.parse.quote(arg)}"` / `urlparse(arg).scheme` output —
-    /// every row here was cross-checked against a real `python3` invocation,
-    /// not derived from the Rust implementation.
+    /// Covers spaces, reserved bytes, percent signs, Unicode, relative paths,
+    /// and already-schemed URLs.
     #[test]
     fn path2url_table() {
         let cases: &[(&str, &str)] = &[

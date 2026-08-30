@@ -1,6 +1,5 @@
-//! `check may-start`: startup precondition checks. Ports `check_may_start`
-//! (`main.py:4535`). Returns a verdict of error/visible/silent messages; the
-//! caller decides exit status. See analysis §1.
+//! Startup precondition checks for `check may-start`. Returns a verdict of
+//! error, visible, and silent messages; the caller decides the exit status.
 //!
 //! The side-effecting probes (uid, env, `/proc`, the session/system buses, the
 //! foreground VT) are abstracted behind [`Probes`] so the branching logic is

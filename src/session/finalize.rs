@@ -1,5 +1,4 @@
-//! `finalize`: export variables to the activation environments and signal
-//! readiness. Ports `finalize` (`main.py:2424`). See `REFERENCE.md` §4.2.
+//! Export compositor variables and signal readiness.
 
 use crate::error::{Error, Result};
 use crate::filter;

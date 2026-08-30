@@ -1,10 +1,8 @@
 //! Session orchestration: environment preparation, finalization, cleanup, the
 //! readiness wait/exec machinery, and the `start` exec-chain.
 //!
-//! Most of this only does real work on **Linux** (D-Bus, fork/exec, systemd);
-//! it is written to compile everywhere, with non-Linux fallbacks where a syscall
-//! is Linux-only. **Runtime-unverified until the integration phase.**
-//! See `REFERENCE.md` §3/§4/§5/§9.
+//! Runtime behavior is Linux-only and is exercised by the Tier B integration
+//! suite. A small non-Linux fallback exists only for the pidfd syscall path.
 
 pub mod check;
 pub mod cleanup;

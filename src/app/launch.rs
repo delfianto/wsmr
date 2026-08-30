@@ -1,6 +1,4 @@
-//! `wsmr app`: resolve the target (desktop entry or bare command), expand its
-//! `Exec`, optionally wrap it in a terminal, and launch it as a systemd
-//! scope/service in a slice via `systemd-run`. Ports `app()` (`main.py:3335`).
+//! Resolve an application target and launch it through `systemd-run`.
 //!
 //! [`resolve`] does all resolution and returns the final `systemd-run` argv(s)
 //! without executing — used both by [`run`] (which execs/spawns) and by the

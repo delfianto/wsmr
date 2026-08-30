@@ -1,9 +1,7 @@
 //! wsmr binary entrypoint: parse the CLI and dispatch.
 //!
-//! All subcommands are wired to real logic (`session::*`, `app::*`). Linux-only
-//! runtime paths are verified via the Podman integration harness. Deliberately
-//! deferred bits (e.g. desktop-entry *compositor* resolution) return
-//! `Error::NotImplemented`.
+//! All subcommands dispatch to the library's session and application modules.
+//! Linux runtime paths are verified by the Podman integration harness.
 
 use anyhow::Result;
 use clap::Parser;
@@ -178,10 +176,8 @@ fn rung(r: CliRung) -> Rung {
     }
 }
 
-/// Resolve the unit rung: the CLI flag if given, else `$UWSM_UNIT_RUNG` (only
-/// `"run"`/`"home"` are honored; anything else warns and falls back), else
-/// `run`. Ports the `unit_rung_default` resolution around `start`'s `-U`
-/// (`main.py:1791-1801`).
+/// Resolve the unit rung from the CLI, then `$UWSM_UNIT_RUNG`, then the
+/// `run` default. Invalid environment values warn and fall back to `run`.
 fn resolve_rung(cli: Option<CliRung>) -> Rung {
     resolve_rung_with(cli, std::env::var("UWSM_UNIT_RUNG").ok())
 }
@@ -202,10 +198,8 @@ fn resolve_rung_with(cli: Option<CliRung>, env: Option<String>) -> Rung {
 }
 
 /// Resolve whether tweak drop-ins should be generated: `-t`/`-T` if given,
-/// else `$UWSM_TWEAKS` (invalid value warns, falls back to `true`), else the
-/// deprecated `$UWSM_NO_TWEAKS` (warns it's deprecated; invalid value warns,
-/// falls back to `true`), else `true`. Ports the `tweaks_default` resolution
-/// around `start`'s `-t`/`-T` (`main.py:1812-1839`).
+/// then `$UWSM_TWEAKS`, then deprecated `$UWSM_NO_TWEAKS`, then `true`.
+/// Invalid environment values warn and fall back to `true`.
 fn resolve_tweaks(no_tweaks_flag: bool, tweaks_flag: bool) -> bool {
     resolve_tweaks_with(
         no_tweaks_flag,
@@ -243,8 +237,8 @@ fn resolve_tweaks_with(
     true
 }
 
-/// `str2bool_plus` (non-numeric mode) from `misc.py:13`: numeric strings
-/// convert via `> 0`; `""`/`"no"`/`"false"`/`"n"` (case-insensitive) are
+/// Parse upstream-compatible boolean values. Numeric strings use `> 0`;
+/// `""`/`"no"`/`"false"`/`"n"` (case-insensitive) are
 /// `false`; `"yes"`/`"true"`/`"y"` are `true`; anything else is rejected.
 fn str2bool_plus(s: &str) -> std::result::Result<bool, ()> {
     if let Ok(n) = s.parse::<i64>() {
@@ -259,7 +253,7 @@ fn str2bool_plus(s: &str) -> std::result::Result<bool, ()> {
 
 /// Resolve the system-`graphical.target` gate from `-g`/`-G`: `-G` (abort)
 /// takes precedence over `-g` (warn) whenever it's non-negative; a negative
-/// value disables its own gate. Ports the precedence in `main.py:4715-4720`.
+/// value disables its own gate.
 fn resolve_gst_gate(warn_seconds: i64, abort_seconds: i64) -> GstGate {
     if abort_seconds >= 0 {
         GstGate::Abort(Duration::from_secs(abort_seconds as u64))
@@ -274,8 +268,7 @@ fn resolve_gst_gate(warn_seconds: i64, abort_seconds: i64) -> GstGate {
 /// lookup, so the generated unit hardcodes the resolved binary rather than a
 /// bare name it re-resolves at every launch. A no-op if `comp.cmdline[0]` is
 /// already absolute (already-hardcoded implicitly, e.g. the compositor was
-/// given as a path). Ports the `Args.parsed.hardcode` branch of
-/// `fill_comp_globals` (`main.py:4320-4328`).
+/// given as a path).
 fn apply_hardcode(comp: &mut CompGlobals, hardcode: bool) -> WResult<()> {
     if !hardcode {
         return Ok(());
@@ -364,7 +357,7 @@ mod tests {
     #[test]
     fn resolve_rung_invalid_env_warns_and_falls_back_to_run() {
         // "runtime" is a valid *CLI* alias but not a valid *env var* value
-        // upstream would accept — matches main.py's exact env validation.
+        // upstream would accept.
         assert_eq!(
             resolve_rung_with(None, Some("runtime".into())),
             Rung::Runtime

@@ -1,6 +1,5 @@
-//! Environment variable-name filtering, ported from `filter_varnames`
-//! (`main.py:2633`). Drops shell-internal noise vars and rejects names that
-//! don't look like POSIX environment variable names. See `REFERENCE.md` §2.
+//! Environment variable-name filtering. Drops shell noise and rejects names that
+//! don't look like POSIX environment variable names.
 
 use std::collections::BTreeMap;
 

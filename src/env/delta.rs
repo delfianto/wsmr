@@ -1,9 +1,9 @@
-//! The environment-delta set-algebra, ported from `prepare_env` (`main.py:2877`).
+//! Environment-delta set algebra.
 //!
 //! Pure logic — the heart of the bootstrap. Given the systemd activation
 //! environment before prep (`env_pre`) and the shell loader's resulting
 //! environment (`env_post`), compute what to set, unset, and record for cleanup,
-//! applying the [`crate::varnames`] policy. See `REFERENCE.md` §3.2.
+//! applying the [`crate::varnames`] policy.
 
 use crate::varnames;
 use std::collections::{BTreeMap, BTreeSet};

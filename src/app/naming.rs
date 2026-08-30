@@ -1,5 +1,4 @@
-//! systemd-run unit-name generation with systemd escaping and 255-byte
-//! truncation. Ports the auto-naming in `app` (`main.py:3659`). See analysis §6.
+//! systemd-run unit-name generation with escaping and 255-byte truncation.
 
 use crate::units::escape::simple_systemd_escape;
 

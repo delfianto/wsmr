@@ -1,6 +1,5 @@
-//! Parse the env-preloader shell loader's output: human messages, then the
-//! random mark, then a NUL-separated `env -0` dump. Ports the dump handling in
-//! `prepare_env` (`main.py:2842`). See `REFERENCE.md` §3.2 step 7.
+//! Parse the environment loader's human messages, random mark, and
+//! NUL-separated `env -0` dump.
 
 use crate::env::files::parse_env_nul;
 use crate::error::{Error, Result};

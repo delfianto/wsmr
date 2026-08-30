@@ -1,9 +1,5 @@
-//! `start`: generate units, refuse double-start, bind to our PID, snapshot the
-//! login environment, and become the session anchor by exec-ing the shell
-//! signal handler on the session envelope target. Ports the `start` dispatch
-//! (`main.py:4719`) + exec chain (`:4894`). See `REFERENCE.md` §3.1/§9.
-//!
-//! **Linux-runtime; unverified until the integration phase.**
+//! Generate units, reject double starts, snapshot the login environment, and
+//! replace the start process with the session anchor.
 
 use crate::comp::CompGlobals;
 use crate::env::files;
@@ -20,10 +16,8 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-/// System `graphical.target` gate, driven by `start -g`/`-G`. Ports the
-/// mutually exclusive `gst_warn_seconds`/`gst_abort_seconds` handling
-/// (`main.py:1890`/`:4709`) — `-G` (abort) takes precedence over `-g` (warn)
-/// when both would apply; a negative value disables its own gate.
+/// System `graphical.target` gate, driven by `start -g`/`-G`. The abort gate
+/// takes precedence when both apply; a negative value disables either gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GstGate {
     /// Don't check at all.
@@ -60,7 +54,7 @@ pub struct StartOpts {
 /// conflict) or `--dry-run` therefore never generates, writes, or reloads.
 pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
     // (1) optional system graphical.target gate (read-only). Skipped for
-    // only-generate/dry-run, matching upstream (`main.py:4710-4713`) — those
+    // only-generate/dry-run, matching upstream — those
     // modes don't actually start anything, so gating them on system state
     // that has no bearing on what they do would just be noise.
     if !opts.only_generate && !opts.dry_run {

@@ -3,8 +3,7 @@
 //! Library crate holding the reusable pieces; the `wsmr` binary (`src/main.rs`)
 //! is a thin dispatcher over these modules.
 //!
-//! See `docs/architecture.md` for wsmr's own design and `REFERENCE.md`
-//! (local, not committed) for the upstream Python mechanics.
+//! See `docs/architecture.md` for the design and focused subsystem guides.
 
 pub mod app;
 pub mod cli;
