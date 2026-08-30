@@ -71,8 +71,13 @@ for _ in $(seq 1 10); do
     fi
     sleep 0.5
 done
-[ "$FAILED_OK" -eq 1 ] \
-    || fail "wayland-wm@ never recorded a Failed result -- may be stuck instead of cleanly failing"
+if [ "$FAILED_OK" -ne 1 ]; then
+    echo "---- diagnostic: unit state ----" >&2
+    systemctl --user status 'wayland-wm@*.service' --no-pager -l >&2 || true
+    echo "---- diagnostic: all journal lines mentioning wayland-wm@ ----" >&2
+    journalctl --user -n 500 --no-pager 2>/dev/null | grep -E "wayland-wm@" >&2 || true
+    fail "wayland-wm@ never recorded a Failed result -- may be stuck instead of cleanly failing"
+fi
 echo "PASS: wayland-wm@ recorded a clean Failed result, not an indefinite hang"
 
 echo "== asserting the session never reached full readiness (graphical-session.target) =="
