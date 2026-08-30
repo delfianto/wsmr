@@ -36,7 +36,7 @@
 use crate::env::files::{self, CleanupEntry};
 use crate::error::{Error, Result};
 use crate::session::runtime_path;
-use crate::sysd::dbus::SessionBus;
+use crate::sysd::dbus::StateOps;
 use crate::util::fsutil;
 use crate::varnames;
 use std::collections::{BTreeMap, BTreeSet};
@@ -107,7 +107,7 @@ fn read_generation(path: &PathBuf) -> Result<Option<String>> {
 /// snapshot with an empty cleanup list. Returns the new generation id.
 ///
 /// Called once by `prepare-env` at the start of a session.
-pub fn begin_generation(bus: &SessionBus, pre: &BTreeMap<String, String>) -> Result<String> {
+pub fn begin_generation(bus: &impl StateOps, pre: &BTreeMap<String, String>) -> Result<String> {
     let _guard = lock()?;
     restore_and_clear_locked(bus)?;
 
@@ -154,7 +154,7 @@ pub fn append_cleanup(names: impl IntoIterator<Item = String>) -> Result<()> {
 /// environment, unset whatever this generation's cleanup list (plus
 /// `always_cleanup`, minus `never_cleanup`) still calls for, then remove the
 /// state files. Called once by `cleanup-env`.
-pub fn end_generation(bus: &SessionBus) -> Result<()> {
+pub fn end_generation(bus: &impl StateOps) -> Result<()> {
     let _guard = lock()?;
     restore_and_clear_locked(bus)
 }
@@ -164,7 +164,7 @@ pub fn end_generation(bus: &SessionBus) -> Result<()> {
 /// *current* generation's cleanup list calls for, then remove the state
 /// files. Must be called with the lock already held. A no-op if no state is
 /// currently on disk.
-fn restore_and_clear_locked(bus: &SessionBus) -> Result<()> {
+fn restore_and_clear_locked(bus: &impl StateOps) -> Result<()> {
     let gen_path = generation_path()?;
     let cleanup_p = cleanup_path()?;
     let pre_p = env_pre_path()?;
@@ -344,6 +344,164 @@ mod tests {
         assert_eq!(read_generation(&p).unwrap(), Some("abc123".to_string()));
         std::fs::write(&p, "\n").unwrap();
         assert_eq!(read_generation(&p).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    #[derive(Default)]
+    struct FakeStateOps {
+        systemd_vars: BTreeMap<String, String>,
+        unset_fails: bool,
+        set_calls: std::cell::RefCell<Vec<BTreeMap<String, String>>>,
+        unset_calls: std::cell::RefCell<Vec<Vec<String>>>,
+    }
+
+    impl crate::sysd::dbus::StateOps for FakeStateOps {
+        fn systemd_vars(&self) -> Result<BTreeMap<String, String>> {
+            Ok(self.systemd_vars.clone())
+        }
+        fn set_systemd_vars(&self, vars: &BTreeMap<String, String>) -> Result<()> {
+            self.set_calls.borrow_mut().push(vars.clone());
+            Ok(())
+        }
+        fn unset_systemd_vars(&self, names: &[String]) -> Result<()> {
+            self.unset_calls.borrow_mut().push(names.to_vec());
+            if self.unset_fails {
+                Err(Error::Resolve("fake unset failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn end_generation_is_a_noop_when_nothing_is_on_disk() {
+        let rt = rt_dir();
+        std::fs::create_dir_all(&rt).unwrap();
+        with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {
+            let bus = FakeStateOps::default();
+            end_generation(&bus).unwrap();
+            assert!(bus.set_calls.borrow().is_empty());
+            assert!(bus.unset_calls.borrow().is_empty());
+        });
+        let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    #[test]
+    fn end_generation_restores_pre_values_and_unsets_session_only_vars() {
+        let rt = rt_dir();
+        std::fs::create_dir_all(rt.join("wsmr")).unwrap();
+        with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {
+            fsutil::atomic_write_path(&generation_path().unwrap(), "gen1\n").unwrap();
+            let mut pre = BTreeMap::new();
+            pre.insert("PRESET".to_string(), "pre_value".to_string());
+            files::save_env(&env_pre_path().unwrap(), &pre, files::Sep::Nul).unwrap();
+            let mut cleanup = BTreeSet::new();
+            cleanup.insert(CleanupEntry {
+                generation: "gen1".into(),
+                name: "SESSION_ONLY".into(),
+            });
+            files::write_cleanup_entries(&cleanup_path().unwrap(), &cleanup).unwrap();
+
+            let mut live = BTreeMap::new();
+            live.insert("PRESET".to_string(), "changed_by_session".to_string());
+            live.insert("SESSION_ONLY".to_string(), "some_value".to_string());
+            live.insert("UNRELATED".to_string(), "x".to_string());
+            let bus = FakeStateOps {
+                systemd_vars: live,
+                ..Default::default()
+            };
+
+            end_generation(&bus).unwrap();
+
+            let set_calls = bus.set_calls.borrow();
+            assert_eq!(set_calls.len(), 1);
+            assert_eq!(set_calls[0].get("PRESET"), Some(&"pre_value".to_string()));
+
+            let unset_calls = bus.unset_calls.borrow();
+            assert_eq!(unset_calls.len(), 1);
+            assert!(unset_calls[0].contains(&"SESSION_ONLY".to_string()));
+            // A var present before the session (PRESET) is restored, not
+            // unset; an unrelated live var wsmr never tracked is left alone.
+            assert!(!unset_calls[0].contains(&"PRESET".to_string()));
+            assert!(!unset_calls[0].contains(&"UNRELATED".to_string()));
+
+            assert!(!generation_path().unwrap().exists());
+            assert!(!env_pre_path().unwrap().exists());
+            assert!(!cleanup_path().unwrap().exists());
+        });
+        let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    #[test]
+    fn end_generation_fails_closed_and_leaves_state_files_on_a_bus_failure() {
+        let rt = rt_dir();
+        std::fs::create_dir_all(rt.join("wsmr")).unwrap();
+        with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {
+            fsutil::atomic_write_path(&generation_path().unwrap(), "gen1\n").unwrap();
+            let mut cleanup = BTreeSet::new();
+            cleanup.insert(CleanupEntry {
+                generation: "gen1".into(),
+                name: "SESSION_ONLY".into(),
+            });
+            files::write_cleanup_entries(&cleanup_path().unwrap(), &cleanup).unwrap();
+            let mut live = BTreeMap::new();
+            live.insert("SESSION_ONLY".to_string(), "some_value".to_string());
+            let bus = FakeStateOps {
+                systemd_vars: live,
+                unset_fails: true,
+                ..Default::default()
+            };
+
+            let err = end_generation(&bus).unwrap_err();
+            assert!(err.to_string().contains("fake unset failure"));
+
+            // Fail-closed: a failed bus call must leave the state files in
+            // place so a later retry can still act on them, per the
+            // module's own documented design -- not exercised by any prior
+            // test.
+            assert!(generation_path().unwrap().exists());
+            assert!(cleanup_path().unwrap().exists());
+        });
+        let _ = std::fs::remove_dir_all(&rt);
+    }
+
+    #[test]
+    fn begin_generation_resolves_an_abandoned_prior_generation_first() {
+        let rt = rt_dir();
+        std::fs::create_dir_all(rt.join("wsmr")).unwrap();
+        with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {
+            // Simulate an abandoned session: an old generation's files are
+            // still on disk (no end_generation ever ran for it).
+            fsutil::atomic_write_path(&generation_path().unwrap(), "oldgen\n").unwrap();
+            let mut old_pre = BTreeMap::new();
+            old_pre.insert("OLD_PRESET".to_string(), "old_value".to_string());
+            files::save_env(&env_pre_path().unwrap(), &old_pre, files::Sep::Nul).unwrap();
+
+            let mut live = BTreeMap::new();
+            live.insert("OLD_PRESET".to_string(), "left_over".to_string());
+            let bus = FakeStateOps {
+                systemd_vars: live,
+                ..Default::default()
+            };
+
+            let mut new_pre = BTreeMap::new();
+            new_pre.insert("NEW_PRESET".to_string(), "new_value".to_string());
+            let new_id = begin_generation(&bus, &new_pre).unwrap();
+
+            assert_ne!(new_id, "oldgen");
+            // The abandoned generation's own pre-session value was restored
+            // before the new generation was established.
+            let set_calls = bus.set_calls.borrow();
+            assert!(
+                set_calls
+                    .iter()
+                    .any(|c| c.get("OLD_PRESET") == Some(&"old_value".to_string()))
+            );
+            assert_eq!(
+                read_generation(&generation_path().unwrap()).unwrap(),
+                Some(new_id)
+            );
+        });
         let _ = std::fs::remove_dir_all(&rt);
     }
 }
