@@ -2,7 +2,7 @@
 //! `is_active` (`main.py:1189`). See `REFERENCE.md` §8.3.
 
 use crate::error::Result;
-use crate::sysd::dbus::SessionBus;
+use crate::sysd::dbus::{SessionBus, SessionOps};
 use crate::units::generate::{self, Rung};
 use crate::units::plan::{RemovalPlan, plan_remove_all};
 use std::path::Path;
@@ -28,7 +28,7 @@ const GENERIC_ACTIVE_PATTERNS: &[&str] = &[
 ];
 
 /// Whether a compositor or graphical session is active/activating.
-pub fn is_active(bus: &SessionBus) -> Result<bool> {
+pub fn is_active(bus: &impl SessionOps) -> Result<bool> {
     is_active_for(bus, None)
 }
 
@@ -36,7 +36,7 @@ pub fn is_active(bus: &SessionBus) -> Result<bool> {
 /// compositor/graphical-session unit) is active/activating. Ports `is_active`
 /// (`main.py:1189`) including its `check_wm_id` selector — used by both the
 /// double-start refusal (`None`) and `check is-active <WM>` (`Some`).
-pub fn is_active_for(bus: &SessionBus, wm_id: Option<&str>) -> Result<bool> {
+pub fn is_active_for(bus: &impl SessionOps, wm_id: Option<&str>) -> Result<bool> {
     match wm_id {
         None => Ok(!bus
             .list_units_by_patterns(&["active", "activating"], GENERIC_ACTIVE_PATTERNS)?

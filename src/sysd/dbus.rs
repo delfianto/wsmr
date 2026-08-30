@@ -205,10 +205,6 @@ impl SessionBus {
         Ok(SystemdManagerProxyBlocking::new(&self.conn)?)
     }
 
-    fn dbus(&self) -> Result<DBusDaemonProxyBlocking<'_>> {
-        Ok(DBusDaemonProxyBlocking::new(&self.conn)?)
-    }
-
     /// Read the systemd activation environment, filtered to valid names.
     pub fn systemd_vars(&self) -> Result<BTreeMap<String, String>> {
         let mut map = BTreeMap::new();
@@ -241,22 +237,11 @@ impl SessionBus {
     /// leaves nothing applied at all; if the D-Bus step then fails, systemd
     /// is already correct and only the secondary D-Bus copy is left stale —
     /// reported as [`Error::PartialEnvUpdate`] so the caller knows exactly
-    /// which side needs a retry.
+    /// which side needs a retry. The sequencing itself lives in
+    /// [`set_systemd_vars_with`], parameterized over [`EnvUpdateOps`] so it's
+    /// unit-testable without a live session bus.
     pub fn set_systemd_vars(&self, vars: &BTreeMap<String, String>) -> Result<()> {
-        let assignments: Vec<String> = vars.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        self.manager()?.set_environment(assignments)?;
-        if !self.is_dbus_broker()? {
-            let map: HashMap<String, String> = vars.clone().into_iter().collect();
-            self.dbus()?
-                .update_activation_environment(map)
-                .map_err(|source| Error::PartialEnvUpdate {
-                    operation: "set",
-                    applied: "systemd",
-                    failed: "the D-Bus daemon",
-                    source: Box::new(source),
-                })?;
-        }
-        Ok(())
+        set_systemd_vars_with(self, vars)
     }
 
     /// Unset variables from the systemd (and, for classic dbus-daemon, the
@@ -267,28 +252,9 @@ impl SessionBus {
     /// the variable is left *present* on the side almost everything reads
     /// rather than prematurely gone from it. Reported as
     /// [`Error::PartialEnvUpdate`] when the D-Bus step had already succeeded.
+    /// See [`unset_systemd_vars_with`] for the testable sequencing.
     pub fn unset_systemd_vars(&self, names: &[String]) -> Result<()> {
-        let dbus_already_cleared = !self.is_dbus_broker()?;
-        if dbus_already_cleared {
-            let map: HashMap<String, String> =
-                names.iter().map(|n| (n.clone(), String::new())).collect();
-            self.dbus()?.update_activation_environment(map)?;
-        }
-        self.manager()?
-            .unset_environment(names.to_vec())
-            .map_err(|source| {
-                if dbus_already_cleared {
-                    Error::PartialEnvUpdate {
-                        operation: "unset",
-                        applied: "the D-Bus daemon",
-                        failed: "systemd",
-                        source: Box::new(source),
-                    }
-                } else {
-                    Error::Dbus(source)
-                }
-            })?;
-        Ok(())
+        unset_systemd_vars_with(self, names)
     }
 
     /// Reload the systemd user manager.
@@ -462,6 +428,99 @@ impl SessionLookup for SystemBus {
     }
 }
 
+/// Session-bus operations [`crate::session::start::run`] needs before it
+/// becomes the session anchor, abstracted so its double-start-refusal and
+/// reload-failure branches are unit-testable without a live session bus.
+/// `SessionBus` is the production implementation; tests inject a fake. Same
+/// pattern as [`SessionLookup`], scoped to what `start`'s pre-exec steps use.
+pub trait SessionOps {
+    /// Same contract as [`SessionBus::list_units_by_patterns`].
+    fn list_units_by_patterns(&self, states: &[&str], patterns: &[&str]) -> Result<Vec<UnitInfo>>;
+    /// Same contract as [`SessionBus::reload`].
+    fn reload(&self) -> Result<()>;
+}
+
+impl SessionOps for SessionBus {
+    fn list_units_by_patterns(&self, states: &[&str], patterns: &[&str]) -> Result<Vec<UnitInfo>> {
+        SessionBus::list_units_by_patterns(self, states, patterns)
+    }
+    fn reload(&self) -> Result<()> {
+        SessionBus::reload(self)
+    }
+}
+
+/// The D-Bus primitives behind [`SessionBus::set_systemd_vars`]/
+/// [`SessionBus::unset_systemd_vars`], abstracted so their partial-failure
+/// sequencing is unit-testable without a live session bus. `SessionBus` is
+/// the production implementation; tests inject a fake.
+pub trait EnvUpdateOps {
+    /// Same contract as the `SystemdManager.SetEnvironment` D-Bus call.
+    fn set_environment(&self, assignments: Vec<String>) -> zbus::Result<()>;
+    /// Same contract as the `SystemdManager.UnsetEnvironment` D-Bus call.
+    fn unset_environment(&self, names: Vec<String>) -> zbus::Result<()>;
+    /// Same contract as [`SessionBus::is_dbus_broker`].
+    fn is_dbus_broker(&self) -> Result<bool>;
+    /// Same contract as the `DBus.UpdateActivationEnvironment` D-Bus call.
+    fn update_activation_environment(&self, env: HashMap<String, String>) -> zbus::Result<()>;
+}
+
+impl EnvUpdateOps for SessionBus {
+    fn set_environment(&self, assignments: Vec<String>) -> zbus::Result<()> {
+        SystemdManagerProxyBlocking::new(&self.conn)?.set_environment(assignments)
+    }
+    fn unset_environment(&self, names: Vec<String>) -> zbus::Result<()> {
+        SystemdManagerProxyBlocking::new(&self.conn)?.unset_environment(names)
+    }
+    fn is_dbus_broker(&self) -> Result<bool> {
+        SessionBus::is_dbus_broker(self)
+    }
+    fn update_activation_environment(&self, env: HashMap<String, String>) -> zbus::Result<()> {
+        DBusDaemonProxyBlocking::new(&self.conn)?.update_activation_environment(env)
+    }
+}
+
+/// Sequencing for [`SessionBus::set_systemd_vars`] — see its doc comment for
+/// the ordering rationale.
+fn set_systemd_vars_with(ops: &impl EnvUpdateOps, vars: &BTreeMap<String, String>) -> Result<()> {
+    let assignments: Vec<String> = vars.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    ops.set_environment(assignments)?;
+    if !ops.is_dbus_broker()? {
+        let map: HashMap<String, String> = vars.clone().into_iter().collect();
+        ops.update_activation_environment(map)
+            .map_err(|source| Error::PartialEnvUpdate {
+                operation: "set",
+                applied: "systemd",
+                failed: "the D-Bus daemon",
+                source: Box::new(source),
+            })?;
+    }
+    Ok(())
+}
+
+/// Sequencing for [`SessionBus::unset_systemd_vars`] — see its doc comment
+/// for the ordering rationale.
+fn unset_systemd_vars_with(ops: &impl EnvUpdateOps, names: &[String]) -> Result<()> {
+    let dbus_already_cleared = !ops.is_dbus_broker()?;
+    if dbus_already_cleared {
+        let map: HashMap<String, String> =
+            names.iter().map(|n| (n.clone(), String::new())).collect();
+        ops.update_activation_environment(map)?;
+    }
+    ops.unset_environment(names.to_vec()).map_err(|source| {
+        if dbus_already_cleared {
+            Error::PartialEnvUpdate {
+                operation: "unset",
+                applied: "the D-Bus daemon",
+                failed: "systemd",
+                source: Box::new(source),
+            }
+        } else {
+            Error::Dbus(source)
+        }
+    })?;
+    Ok(())
+}
+
 impl SystemBus {
     fn systemd(&self) -> Result<SystemdManagerProxyBlocking<'_>> {
         Ok(SystemdManagerProxyBlocking::new(&self.conn)?)
@@ -537,5 +596,121 @@ mod tests {
             Some("my\\x2dcomp")
         );
         assert_eq!(extract_wm_id("other.service"), None);
+    }
+
+    #[derive(Default)]
+    struct FakeEnvOps {
+        set_fails: bool,
+        unset_fails: bool,
+        dbus_broker: bool,
+        update_fails: bool,
+    }
+
+    impl EnvUpdateOps for FakeEnvOps {
+        fn set_environment(&self, _assignments: Vec<String>) -> zbus::Result<()> {
+            if self.set_fails {
+                Err(zbus::Error::Failure("set failed".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn unset_environment(&self, _names: Vec<String>) -> zbus::Result<()> {
+            if self.unset_fails {
+                Err(zbus::Error::Failure("unset failed".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn is_dbus_broker(&self) -> Result<bool> {
+            Ok(self.dbus_broker)
+        }
+        fn update_activation_environment(&self, _env: HashMap<String, String>) -> zbus::Result<()> {
+            if self.update_fails {
+                Err(zbus::Error::Failure("update failed".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn set_systemd_vars_with_reports_partial_update_when_dbus_step_fails() {
+        let ops = FakeEnvOps {
+            update_fails: true,
+            ..Default::default()
+        };
+        let err = set_systemd_vars_with(&ops, &BTreeMap::new()).unwrap_err();
+        match err {
+            Error::PartialEnvUpdate {
+                operation,
+                applied,
+                failed,
+                ..
+            } => {
+                assert_eq!(operation, "set");
+                assert_eq!(applied, "systemd");
+                assert_eq!(failed, "the D-Bus daemon");
+            }
+            other => panic!("expected PartialEnvUpdate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_systemd_vars_with_skips_dbus_step_under_dbus_broker() {
+        // dbus-broker shares the systemd activation environment, so the
+        // separate D-Bus update is skipped entirely — update_fails must
+        // never even be consulted.
+        let ops = FakeEnvOps {
+            dbus_broker: true,
+            update_fails: true,
+            ..Default::default()
+        };
+        assert!(set_systemd_vars_with(&ops, &BTreeMap::new()).is_ok());
+    }
+
+    #[test]
+    fn set_systemd_vars_with_propagates_the_systemd_step_failure_plainly() {
+        let ops = FakeEnvOps {
+            set_fails: true,
+            ..Default::default()
+        };
+        let err = set_systemd_vars_with(&ops, &BTreeMap::new()).unwrap_err();
+        assert!(matches!(err, Error::Dbus(_)));
+    }
+
+    #[test]
+    fn unset_systemd_vars_with_reports_partial_update_when_systemd_step_fails() {
+        let ops = FakeEnvOps {
+            unset_fails: true,
+            ..Default::default()
+        };
+        let err = unset_systemd_vars_with(&ops, &[]).unwrap_err();
+        match err {
+            Error::PartialEnvUpdate {
+                operation,
+                applied,
+                failed,
+                ..
+            } => {
+                assert_eq!(operation, "unset");
+                assert_eq!(applied, "the D-Bus daemon");
+                assert_eq!(failed, "systemd");
+            }
+            other => panic!("expected PartialEnvUpdate, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unset_systemd_vars_with_reports_plain_dbus_error_under_dbus_broker() {
+        // dbus_broker: true means the D-Bus step is skipped, so a failing
+        // systemd unset can't have left the D-Bus side ahead of it — it's
+        // just a plain failure, not a partial-update situation.
+        let ops = FakeEnvOps {
+            dbus_broker: true,
+            unset_fails: true,
+            ..Default::default()
+        };
+        let err = unset_systemd_vars_with(&ops, &[]).unwrap_err();
+        assert!(matches!(err, Error::Dbus(_)));
     }
 }

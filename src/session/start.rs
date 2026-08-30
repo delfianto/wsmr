@@ -9,7 +9,7 @@ use crate::comp::CompGlobals;
 use crate::env::files;
 use crate::error::{Error, Result};
 use crate::session::{helpers, runtime_path};
-use crate::sysd::dbus::{SessionBus, SystemBus};
+use crate::sysd::dbus::{SessionBus, SessionOps, SystemBus};
 use crate::units::generate::{self, GenOutcome, Rung};
 use crate::units::plan::{GenerationPlan, plan_generate};
 use crate::units::templates::{DropinInput, RenderCtx};
@@ -67,10 +67,17 @@ pub fn run(comp: &CompGlobals, opts: &StartOpts) -> Result<()> {
         gst_gate(opts.gst_gate)?;
     }
 
+    let bus = SessionBus::connect()?;
+    run_with(comp, opts, &bus)
+}
+
+/// The bus-parameterized core of [`run`], split out so the double-start
+/// refusal and reload-failure branches are unit-testable against a fake
+/// [`SessionOps`] instead of a live session bus.
+fn run_with(comp: &CompGlobals, opts: &StartOpts, bus: &impl SessionOps) -> Result<()> {
     // (2) refuse double start (read-only) before generating or reloading
     // anything.
-    let bus = SessionBus::connect()?;
-    refuse_if_active(crate::session::stop::is_active(&bus)?)?;
+    refuse_if_active(crate::session::stop::is_active(bus)?)?;
 
     // (3) compute the generation plan (read-only: stats/reads existing files
     // and the ownership manifest, never writes).
@@ -300,6 +307,136 @@ mod tests {
         assert!(refuse_if_active(false).is_ok());
         let err = refuse_if_active(true).unwrap_err();
         assert!(err.to_string().contains("already active"));
+    }
+
+    struct FakeBus {
+        active: bool,
+        reload_fails: bool,
+    }
+
+    impl crate::sysd::dbus::SessionOps for FakeBus {
+        fn list_units_by_patterns(
+            &self,
+            _states: &[&str],
+            _patterns: &[&str],
+        ) -> Result<Vec<crate::sysd::dbus::UnitInfo>> {
+            if !self.active {
+                return Ok(Vec::new());
+            }
+            let path = zbus::zvariant::OwnedObjectPath::try_from("/").unwrap();
+            Ok(vec![crate::sysd::dbus::UnitInfo {
+                name: "wayland-wm@hyprland.desktop.service".into(),
+                description: String::new(),
+                load_state: "loaded".into(),
+                active_state: "active".into(),
+                sub_state: "running".into(),
+                following: String::new(),
+                unit_path: path.clone(),
+                job_id: 0,
+                job_type: String::new(),
+                job_path: path,
+            }])
+        }
+
+        fn reload(&self) -> Result<()> {
+            if self.reload_fails {
+                Err(Error::Resolve("fake reload failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new() -> TempDir {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let p =
+                std::env::temp_dir().join(format!("wsmr-start-{}-{}", std::process::id(), nanos));
+            std::fs::create_dir_all(&p).unwrap();
+            TempDir(p)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn minimal_comp() -> CompGlobals {
+        CompGlobals {
+            cmdline: vec!["/usr/bin/sway".into()],
+            id: "sway".into(),
+            id_unit_string: "sway".into(),
+            bin_name: "sway".into(),
+            bin_id: "sway".into(),
+            desktop_names: vec!["sway".into()],
+            name: None,
+            description: None,
+            cli_desktop_names: vec!["sway".into()],
+            cli_desktop_names_exclusive: true,
+        }
+    }
+
+    fn minimal_opts() -> StartOpts {
+        StartOpts {
+            only_generate: false,
+            dry_run: false,
+            rung: crate::units::generate::Rung::Runtime,
+            gst_gate: GstGate::Disabled,
+            tweaks: true,
+            bin_path: "/usr/bin/wsmr".into(),
+        }
+    }
+
+    #[test]
+    fn run_with_refuses_when_already_active_and_touches_nothing() {
+        let td = TempDir::new();
+        crate::testutil::with_env(
+            &[("XDG_RUNTIME_DIR", Some(td.path().to_str().unwrap()))],
+            || {
+                let bus = FakeBus {
+                    active: true,
+                    reload_fails: false,
+                };
+                let err = run_with(&minimal_comp(), &minimal_opts(), &bus).unwrap_err();
+                assert!(err.to_string().contains("already active"));
+            },
+        );
+        // Refused before plan_generate ever ran, so nothing was written.
+        let entries: Vec<_> = std::fs::read_dir(td.path()).unwrap().collect();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn run_with_surfaces_reload_failure_after_a_coherent_generation() {
+        let td = TempDir::new();
+        crate::testutil::with_env(
+            &[("XDG_RUNTIME_DIR", Some(td.path().to_str().unwrap()))],
+            || {
+                let bus = FakeBus {
+                    active: false,
+                    reload_fails: true,
+                };
+                let err = run_with(&minimal_comp(), &minimal_opts(), &bus).unwrap_err();
+                assert!(err.to_string().contains("fake reload failure"));
+            },
+        );
+        // The on-disk generation completed (apply_generate ran to success)
+        // before the reload call failed — fail-closed, not a mixed state:
+        // the static graph and this compositor's drop-in are both present
+        // and the manifest verifies them.
+        let dir = td.path().join("systemd").join("user");
+        assert!(dir.join("wayland-wm@.service").exists());
+        let manifest = crate::units::manifest::Manifest::load(&dir).unwrap();
+        let content = std::fs::read_to_string(dir.join("wayland-wm@.service")).unwrap();
+        assert!(manifest.verify("wayland-wm@.service", &content));
     }
 
     #[test]
