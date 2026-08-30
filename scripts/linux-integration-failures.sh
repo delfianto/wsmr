@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# P4-03 deferred failure/recovery scenarios, each on its own fresh systemd
-# (Tier B) container boot — see docs/fix-plan.md's scope note on why each
-# needs isolation: a broken scenario can corrupt systemd state a later
+# Failure/recovery scenarios, each on its own fresh systemd (Tier B)
+# container boot: a broken scenario can corrupt systemd state a later
 # scenario in the same run would depend on.
 #
 # Usage: scripts/linux-integration-failures.sh [scenario...]

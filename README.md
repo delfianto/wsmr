@@ -16,13 +16,15 @@ that's fine. wsmr assumes you already run a compositor straight from a TTY or a
 minimal display manager and you understand *why* you'd want systemd to own the
 session graph. There is no hand-holding here and no "paste these dotfiles" path.
 
-> **Status: experiment.** The full lifecycle is verified end-to-end against a
-> *stub* compositor on real systemd, in a container (`just integration`,
-> **not yet run in CI** — see [Development & testing](#development--testing)) —
-> it has not babysat a daily-driver desktop for months. See
-> [Status & disclaimer](#status--disclaimer) and
-> [`docs/fix-plan.md`](docs/fix-plan.md) for exactly what has and hasn't been
-> verified.
+> **Status: feature-complete, well-tested, young.** The full lifecycle is
+> verified end-to-end against both a *stub* compositor on real systemd
+> (`just integration`, **and now in CI** — see
+> [Development & testing](#development--testing)) and real Hyprland
+> sessions on real hardware, including a real display-manager-mediated
+> login on a daily-driver desktop. It has not, however, *been* the daily
+> driver for months — this is a young project, not a battle-tested one. See
+> [Status & disclaimer](#status--disclaimer) and [`TODO.md`](TODO.md) for
+> exactly what's still open.
 
 ## Why this exists
 
@@ -163,50 +165,63 @@ just full-gate       # format --check-only + lint + test — mirrors what CI act
 ```
 
 **What CI (`ci.yml`) actually runs, per push/PR:** `just format --check-only`,
-`just lint`, `cargo build --all-targets --verbose`, `just test`, plus a
-separate MSRV job that repeats build+test pinned to the exact
-`rust-version` in `Cargo.toml`. That's it — no coverage gate, no Tier B, no
-integration matrix.
+`just lint`, `cargo build --all-targets --verbose`, `just test`; a separate
+MSRV job that repeats build+test pinned to the exact `rust-version` in
+`Cargo.toml`; and a `tier-b` job that installs Podman on the stock runner
+and runs the **full Tier-B suite** — the happy-path lifecycle plus all 6
+deliberately-broken failure/recovery scenarios, each on its own fresh
+systemd-as-PID-1 container boot. That last job is labeled "informational"
+and kept non-required in branch protection, not because it's untested —
+it's green — but because it's new enough (2026-08-30) that a residual
+chance of GitHub-runner-specific flakiness hasn't been fully ruled out yet.
 
 Anything touching a live session runs in Podman — not to reach Linux (the
 host already is Linux), but because Tier B boots systemd as PID 1, which
-needs a container's isolation regardless of host setup. **Local-only** —
-none of the following run in CI today:
+needs a container's isolation regardless of host setup:
 
 ```sh
-just test-linux      # Tier A: build + unit tests in a Debian container
-just integration     # Tier B: full session bootstrap on systemd-as-PID-1 —
-                      # asserts the happy-path lifecycle as hard, unignored
-                      # checks; not every failure/recovery scenario is covered yet
-just coverage        # merged unit + integration coverage; >= 90% lines is the
-                      # authoritative *local* gate — not enforced by CI
+just test-linux      # Tier A: build + unit tests in a Debian container — in CI
+just integration     # Tier B happy path — in CI (see above)
+just coverage        # merged unit + integration coverage: 92%+ lines,
+                      # comfortably above the 90% gate — local-only, not in CI yet
 ```
 
 See [`CLAUDE.md`](CLAUDE.md) for the container/coverage internals, and
 [`docs/README.md`](docs/README.md) for the full documentation index —
-architecture, known real-world issues, CLI compatibility, coexistence with
-uwsm, the upstream porting reference, and the live fix-plan tracker.
+architecture (including CLI compatibility and coexistence with `uwsm`),
+known real-world issues, and [`TODO.md`](TODO.md) for exactly what's still
+open.
 
 ## Status & disclaimer
 
-This is an experiment. It reaches into your login session, your `systemd --user`
-manager, and your D-Bus activation environment *on purpose*. The lifecycle is
-verified against a stub compositor on real systemd, run locally in a
-container (`just integration`) — **not currently run in CI**. Unit tests
-(`cargo test`) and lint/format *do* run in CI on every push/PR. None of this
-adds up to a hardened, daily-driven session manager yet.
+It reaches into your login session, your `systemd --user` manager, and your
+D-Bus activation environment *on purpose*. That's a genuinely young project
+disclaimer, not a "does it actually work" one — as of 2026-08-30 the answer
+to "does it actually work" is a well-verified yes:
 
-It has also had a first, partial real-hardware pass — real Hyprland, real
-monitors, a real disposable user — which found three real, non-wsmr bugs
-(a kmscon/compositor seat-ownership conflict, an `xdg-desktop-portal-hyprland`
-crash on teardown, and a Hyprland environment-restoration gap) and
-cross-validated all three against real upstream uwsm to confirm they aren't
-wsmr-specific. **That pass only ever used Hyprland.** No other compositor
-(niri, sway, river, labwc, ...) has been run through wsmr at all — treat
-those as completely untested. See
-[`docs/known-issues.md`](docs/known-issues.md) for the full detail and
-[`docs/fix-plan.md`](docs/fix-plan.md)'s Phase 7 for exactly what is and
-isn't covered.
+- **Automated**: 247 unit tests, 92%+ merged line coverage, and the full
+  Tier-B lifecycle (happy path + all 6 deliberately-broken failure/recovery
+  scenarios) all pass, and all of it — including Tier B — runs in CI on
+  every push/PR.
+- **Real hardware**: a real, disposable-account Hyprland session (monitors,
+  app launches, `hyprctl` output all checked against real values), *and* a
+  real display-manager-mediated login on a daily-driver desktop — `greetd` +
+  `noctalia-greeter` picking the wsmr-managed session entry, reaching a
+  fully healthy session, with the full app-launch surface (compositor
+  keybinds and the desktop shell's own GUI launcher) verified working.
+
+None of that makes it a hardened, multi-machine-tested, daily-driven session
+manager yet — it's had real use on exactly one real desktop. Along the way
+it found four real bugs that aren't wsmr's fault (a kmscon/compositor
+seat-ownership conflict, an `xdg-desktop-portal-hyprland` crash on teardown,
+a Hyprland environment-restoration gap, and a Hyprland-itself compositor
+crash during logout cleanup) and cross-validated the first three against
+real upstream `uwsm` to confirm they aren't wsmr-specific. **All of that
+real-hardware use has only ever been Hyprland.** No other compositor (niri,
+sway, river, labwc, ...) has been run through wsmr at all — treat those as
+completely untested, not "should work in theory." See
+[`docs/known-issues.md`](docs/known-issues.md) for the full detail on every
+finding above, and [`TODO.md`](TODO.md) for exactly what's still open.
 
 If you run it on your actual machine and your session faceplants, your autostart
 turns to confetti, you get dumped back to a TTY, or your toaster gains sentience

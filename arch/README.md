@@ -1,15 +1,22 @@
 # arch/ — Arch/CachyOS packaging and disposable-user E2E harness scaffolding
 
-> **Status (2026-08-29):** `PKGBUILD` built and installed on the real
-> machine; the disposable `wsmr` user exists with linger enabled; a real
-> wsmr-managed Hyprland session has been started, verified against most of
-> `docs/fix-plan.md`'s Phase 7 checklist, and stopped cleanly. See Phase 7's
-> evidence section there for the full results, including two real findings
-> from this pass: a `kmscon`↔Hyprland seat-ownership conflict (with a
-> working VT-based workaround) and an environment-restoration gap on
-> `wsmr stop`. Still not done: any login actually mediated by a display
-> manager (this system's greeter is `greetd` + `noctalia-greeter`, not
-> SDDM), and the P7-02 harness script (everything so far was run by hand).
+> **Status (2026-08-30):** `PKGBUILD` built and installed on the real
+> machine; the disposable `wsmr` user exists with linger enabled;
+> `scripts/e2e-harness.sh`'s three stages (`prepare`/`verify`/`post-logout`)
+> are built and have been run for real against a live wsmr-managed Hyprland
+> session on this account, repeatedly. Two real findings from that work are
+> documented in [`../docs/known-issues.md`](../docs/known-issues.md): a
+> `kmscon`↔Hyprland seat-ownership conflict (working VT-based workaround)
+> and a Hyprland environment-restoration gap (mitigated —
+> `HYPRLAND_NO_SD_VARS=1`, verified fully fixing it). A real
+> display-manager-mediated login has *also* since been verified — not on
+> this disposable account, but on the primary account's own daily-driver
+> desktop (`greetd` + `noctalia-greeter`, also documented in
+> `known-issues.md`); this account's own login is still whatever raw-VT or
+> manual method you use below. See [`../TODO.md`](../TODO.md) for exactly
+> what real-hardware verification is still open — two failure scenarios
+> (compositor crash after readiness, login cancellation) specifically need
+> a genuine interactive console login on *this* account to test.
 
 This directory supports two related but separate things:
 
@@ -17,17 +24,18 @@ This directory supports two related but separate things:
    `/usr/bin/wsmr`. Useful on its own; not what the disposable E2E test
    setup below needs.
 2. **Disposable-user E2E setup** (`e2e-install.sh`, `session/`) — the
-   real-Hyprland-session infrastructure `docs/fix-plan.md`'s Phase 7
-   requires before its "real machine" gate can be considered met. This is
-   *setup*, not verification: it gets you to the point where you can log in
-   as the disposable test user. The actual verification harness (a
-   prepare/verify/post-logout script, the in-session assertions, the
-   failure-injection scenarios) is not written yet — see "What's not here"
-   below.
+   real-Hyprland-session infrastructure needed to verify wsmr against a
+   real compositor on real hardware without touching your own daily-driver
+   account. This is *setup* (getting you to a login prompt for the
+   disposable user) plus the *harness* (`scripts/e2e-harness.sh`, run from
+   outside the disposable account) that turns "log in and poke around" into
+   real, repeatable, scripted assertions.
 
-Read `docs/fix-plan.md`'s Phase 7 section alongside this file; this
-directory exists to satisfy its prerequisites, and nothing here should
-drift from that checklist without updating both.
+Run `scripts/e2e-harness.sh` (from the repo root, as root) for the actual
+verification once you're set up here: `prepare` before logging in,
+`verify` while a wsmr-managed session is live, `post-logout` after it ends.
+Its own `--help`/usage output and inline comments are the checklist —
+nothing external to keep in sync with.
 
 ## Packaging (PKGBUILD)
 
@@ -41,7 +49,7 @@ makepkg -si
 Builds via `cargo build --frozen --release` against the checked-in
 `Cargo.lock`, runs `cargo test` in `check()` (skip with `makepkg --nocheck`
 for a faster iterative build), and installs `/usr/bin/wsmr` plus docs
-(`docs/fix-plan.md`, `docs/architecture.md`, `docs/known-issues.md`)
+(`README.md`, `docs/architecture.md`, `docs/known-issues.md`, `TODO.md`)
 under `/usr/share/doc/wsmr/`, plus a Hyprland wayland-sessions entry
 (`/usr/share/wayland-sessions/hyprland-wsmr.desktop`, from
 `arch/session/hyprland-wsmr.desktop`) so the package is actually usable to
@@ -65,10 +73,10 @@ avoid. Use `e2e-install.sh` instead; it never touches `/usr/bin`.
 
 ## Disposable-user E2E setup
 
-Everything below sets up the **disposable test identity**
-`docs/fix-plan.md`'s Phase 7 prerequisites require: *"Do not use the
-primary user's active uwsm-managed desktop for the first run."* Every step
-is scoped to a brand-new user account plus paths under
+Everything below sets up a **disposable test identity** so real-hardware
+verification never has to touch your own daily-driver account, at least not
+for the first pass. Every step is scoped to a brand-new user account plus
+paths under
 `/usr/local/libexec/wsmr-e2e/` and `/usr/share/wayland-sessions/` — nothing
 here reads or writes the primary user's home directory, `/usr/bin/wsmr`, or
 the primary user's actual uwsm-managed session.
@@ -108,8 +116,7 @@ Two ways to do this — pick one:
   from which binary path it happens to run, so testing against the real
   `/usr/bin/wsmr` is exactly as safe here as a dedicated test path would be
   — and it's what the account will actually be running day to day. This is
-  the path actually used and verified on 2026-08-29 (see `docs/fix-plan.md`
-  Phase 7).
+  the path actually used and verified on 2026-08-29.
 - **Haven't built the package, or want a path that never touches
   `/usr/bin/wsmr`** (e.g. to test a work-in-progress build without a full
   `makepkg -si` cycle): run `./arch/e2e-install.sh` as root instead. It does
@@ -127,8 +134,7 @@ Two ways to do this — pick one:
 
 Either way, when you get to step 5 you'll pick whichever session name
 ("Hyprland (wsmr-managed)" or "Hyprland (wsmr E2E)") matches the path you
-used — and record which one you used in `docs/fix-plan.md`'s Phase 7
-evidence.
+used.
 
 ### 3. Give the test user their own, isolated Hyprland config
 
@@ -157,8 +163,7 @@ adjusting for your real output(s) before the first login.
 
 ### 4. Record versions
 
-Before the first real run, capture what you're testing against — this goes
-into `docs/fix-plan.md`'s Phase 7 evidence section, not just this README:
+Before the first real run, capture what you're testing against:
 
 ```sh
 pacman -Q systemd dbus hyprland wsmr 2>/dev/null
@@ -166,40 +171,52 @@ uname -r
 wsmr --version   # or /usr/local/libexec/wsmr-e2e/*/wsmr --version, if that's the path in use
 ```
 
-### 5. Log in
+(`scripts/e2e-harness.sh prepare` does this automatically as part of its
+own baseline snapshot — see below.)
+
+### 5. Log in, then run the harness
 
 Select **"Hyprland (wsmr-managed)"** (or **"Hyprland (wsmr E2E)"**,
 matching whichever path you used in step 2) in your display manager's
 session picker for the `wsmr` user. **If VT-switching to an unused console
 first spawns a styled console (`kmscon`) instead of a bare login prompt**,
 be aware this can conflict with Hyprland for seat/input ownership — see
-`docs/fix-plan.md`'s Phase 7 evidence for the symptom (mouse/keyboard
-completely unresponsive) and the working fix (`systemctl start
-getty@ttyN.service` on an unused VT first, then switch to *that* one, so
-logind never spawns `kmsconvt@` there). From here, `docs/fix-plan.md`'s
-Phase 7 checklist is what actually verifies the session — see "What's not
-here."
+[`../docs/known-issues.md`](../docs/known-issues.md) for the symptom
+(mouse/keyboard completely unresponsive) and the working fix (`systemctl
+start getty@ttyN.service` on an unused VT first, then switch to *that*
+one, so logind never spawns `kmsconvt@` there).
 
-## What's not here
+From outside the disposable account (as root, from the repo root):
 
-This directory gets you to a login prompt for the disposable user; it does
-not implement:
+```sh
+scripts/e2e-harness.sh prepare --user wsmr      # before logging in
+# ... log in as wsmr, start a wsmr-managed session ...
+scripts/e2e-harness.sh verify --user wsmr       # while the session is live
+# ... log out / wsmr stop ...
+scripts/e2e-harness.sh post-logout --user wsmr  # after it ends
+```
 
-- The **three-stage harness script** (`prepare`/`verify`/`post-logout`)
-  `docs/fix-plan.md`'s Phase 7 calls for.
-- The **in-session assertions** (socket checks, unit introspection, D-Bus
-  activation environment via a custom fixture, app launches, autostart,
-  environment restoration, no-stale-state) as a *repeatable* script — most
-  of these were checked by hand on 2026-08-29; see `docs/fix-plan.md`.
-- The **failure/recovery scenarios** (compositor crash before/after
-  readiness, forced termination, recovery procedure).
+Each stage prints real pass/fail assertions with a real exit code — this
+*is* the checklist, not a pointer to one elsewhere.
 
-Those are real scripting work that, like the Tier-B smoke test in
-`tests/integration/`, only earns trust by being iterated against a real
-session — not something to draft blind and mark done. Write them against
-this setup when you're ready, and record results in `docs/fix-plan.md`'s
-Phase 7 evidence section as you go, the same way every other phase in this
-repo has.
+## What's still not here
+
+This directory plus `scripts/e2e-harness.sh` covers setup, login, and the
+full prepare/verify/post-logout lifecycle. What's still not automated for
+*this* disposable-account, real-hardware path (see [`../TODO.md`](../TODO.md)
+for the complete list, not just the two below):
+
+- **Compositor crash after readiness** and **login cancellation/forced
+  termination** as real-hardware scenarios — both need a genuine
+  interactive console login on this account, which isn't something to
+  script blind from an unattended context. (The container-based Tier-B
+  suite already covers the equivalent scenarios against a stub compositor —
+  see `tests/integration/` — and a third real-hardware scenario, compositor
+  configuration error before readiness, has been verified live and doesn't
+  need this.)
+- **A written, standalone recovery-procedure doc.** The evidence that
+  recovery just works (no manual intervention needed) is solid; nobody's
+  written it up as an operator-facing page yet.
 
 ## Uninstalling the E2E setup
 

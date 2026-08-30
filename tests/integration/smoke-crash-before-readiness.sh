@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # P4-03 scenario: compositor exits before readiness. Runs *inside* the
 # systemd container as the test user, on a freshly-booted container (its own
-# boot, per fix-plan.md's scope note: a broken scenario must not corrupt
-# state a later scenario in the same run would depend on).
+# boot: a broken scenario must not corrupt state a later scenario in the
+# same run would depend on).
 set -euo pipefail
 
 WSMR="${WSMR:-/opt/wsmr-target/debug/wsmr}"

@@ -7,9 +7,9 @@ the exact same machine/account/compositor, specifically to answer "is this a
 wsmr bug, or something wsmr just happens to expose?" Where that's noted
 below, it's because it was actually run, not assumed.
 
-Raw evidence (journal excerpts, exact commands, timestamps) lives in
-[`docs/fix-plan.md`](fix-plan.md)'s Phase 7 section; this document is the
-distilled, standalone version meant to be read on its own.
+This document is the standalone, distilled record — the journal excerpts
+and exact commands quoted below are the evidence, kept inline rather than
+split across files.
 
 ## Compositor support: here be dragons
 
@@ -21,12 +21,11 @@ design claim, not a tested one, for anything other than Hyprland here.
 
 | Compositor | Status |
 |---|---|
-| **Hyprland** | The only one actually run. Version `0.56.2-1` on this host. Real session, real monitors, verified against most of the Phase 7 checklist — see [`docs/fix-plan.md`](fix-plan.md). |
+| **Hyprland** | The only one actually run. Version `0.56.2-1` on this host. Real session, real monitors, real display-manager-mediated login (both a disposable test account and, since 2026-08-30, the primary account's own daily-driver desktop) — see the findings below. |
 | niri, sway, river, labwc, anything else | **Untested. Here be dragons.** No reason to expect the core session/env machinery to behave differently — it doesn't touch compositor internals — but the findings on this page (especially the kmscon conflict, which is a VT/seat-ownership issue between *any* compositor and kmscon) have only been confirmed for Hyprland's specific DRM/seat handling and its specific `exec-once=`/environment-export behavior. Don't assume any of the specifics below transfer; do assume the *category* of problem (seat ownership on manual VT switches, environment re-export races, portal robustness during teardown) is worth checking for on any compositor. |
 
 If you run wsmr against something other than Hyprland and it works (or
-doesn't), that's genuinely new information — see
-[`docs/fix-plan.md`](fix-plan.md) for where to record it.
+doesn't), that's genuinely new information — add a section to this file.
 
 ## kmscon fights the compositor for seat/DRM ownership
 
@@ -102,8 +101,8 @@ formally owned.
 ### Why doesn't a real display-manager login hit this?
 
 This host's actual greeter is `greetd` running `noctalia-greeter-session`
-(not SDDM, which doesn't even exist on this system — an earlier assumption
-in this repo's own tracker was wrong about that; see `docs/fix-plan.md`).
+(not SDDM, which doesn't even exist on this system — an earlier planning
+assumption about that was wrong, corrected once actually checked).
 The likely reason a normal greeter-mediated login never sees the kmscon
 conflict: `greetd` owns VT1 directly via its own service configuration
 (`vt: Specific(1)`), rather than switching to an unused VT and letting
@@ -113,6 +112,37 @@ and doesn't already have a claimed console — which never happens to VT1
 under `greetd`'s own config. **This is a reasoned inference from confirmed
 facts, not something independently live-tested yet** — worth doing before
 treating it as settled.
+
+## Hyprland itself can SIGSEGV during ordinary logout cleanup
+
+**Observed once, real, distinct from the portal SIGSEGV below — not deeply
+root-caused, not cross-validated against real `uwsm`.** On the same host,
+before any of this document's other findings were investigated, a normal
+logout from a real Hyprland session crashed with a `systemd-coredump`
+report for the `Hyprland` binary itself (not a helper process). The stack
+trace runs through `CCompositor::cleanup()` →
+`CHyprDropShadowDecoration::updateWindow` → `CWindow::updateWindowDecos` →
+`Layout::CWindowGroupTarget::onUpdateSpace`/`assignToSpace` → `CGroup`/
+`CWindow` destructors — a crash in Hyprland's own window-group/decoration
+teardown code path while `CCompositor::cleanup()` is tearing down its
+window state during shutdown.
+
+This is **not** the `xdg-desktop-portal-hyprland` crash documented below —
+different binary, different stack, different trigger (that one fires from a
+Wayland registry event landing during teardown; this one is purely
+Hyprland's own internal window/group cleanup, no portal involved). Session
+manager involvement (wsmr or `uwsm`) is incidental here: `wsmr`/`uwsm` only
+ever ask systemd to stop `wayland-wm@.service`; what Hyprland's own process
+does internally while unwinding its window state on receiving that signal
+is entirely its own code. No reason to expect either tool matters to this
+one, but unlike the portal crash, this specific claim was never actually
+tested against real `uwsm` on this host.
+
+**Not reproduced deliberately, not cross-validated, not filed upstream.**
+Seen once, in the course of investigating an unrelated silent-start-failure
+report (which turned out to be a real wsmr bug — the reclaim-stale
+drop-in fix — unrelated to this crash). Worth a deliberate reproduction
+attempt and an upstream Hyprland issue if it recurs.
 
 ## `xdg-desktop-portal-hyprland` SIGSEGV on compositor teardown
 

@@ -18,11 +18,13 @@ than relying on memory; several real bugs in this port were only found that
 way. [`docs/architecture.md`](docs/architecture.md) is this port's own
 design reference (unit graph, session lifecycle, env-delta machinery).
 
-**Status:** past scaffolding — a substantial, working, unit-tested port
-(session bootstrap, environment-delta lifecycle, app launching, CLI surface).
-`docs/fix-plan.md` is the live, authoritative tracker of exactly what's
-verified vs. still open; don't infer status from this paragraph, which will
-drift — check that file.
+**Status:** feature-complete port of the `uwsm` core CLI surface, verified
+end to end — 247 unit tests, all 9 Tier-B failure/recovery scenarios, 92%+
+merged coverage, and a real greetd-mediated Hyprland login on real hardware
+(app-launcher chain included). [`TODO.md`](TODO.md) is the live list of
+exactly what's still open; don't infer status from this paragraph, which
+will drift — check that file. [`docs/known-issues.md`](docs/known-issues.md)
+has the real-world bugs already found and root-caused.
 
 ## Critical constraint: Linux only, for development and runtime alike
 
@@ -48,13 +50,19 @@ Consequences:
   reproducibility independent of whatever's on the dev host; Tier B needs a
   container because it boots **systemd as PID 1**, which you can't (and
   shouldn't) do directly on a running desktop. Tier B's smoke test asserts
-  the full happy-path session lifecycle as hard, unignored checks, so a
-  green run reflects a real pass — it doesn't yet cover every
-  failure/recovery scenario worth testing (see `docs/fix-plan.md` for
-  exactly which ones). Neither tier runs in CI yet; CI
-  (`.github/workflows/ci.yml`) runs format-check, lint, build, and
-  `cargo test` (roughly `just full-gate` plus an explicit build step), plus
-  a separate MSRV job pinned to `Cargo.toml`'s `rust-version`.
+  the full happy-path session lifecycle as hard, unignored checks, plus 6
+  deliberately-broken failure/recovery scenarios
+  (`scripts/linux-integration-failures.sh`) each on their own fresh
+  container boot — all 9 of the failure/recovery scenarios worth testing at
+  this level are covered (see `TODO.md` for what's left beyond that). CI
+  (`.github/workflows/ci.yml`) runs format-check, lint, build, `cargo test`
+  (roughly `just full-gate` plus an explicit build step), a separate MSRV
+  job pinned to `Cargo.toml`'s `rust-version`, **and** a `tier-b` job that
+  installs Podman on the stock GitHub-hosted runner and runs the full Tier-B
+  suite (happy path + all 6 failure scenarios) on every push/PR — kept
+  non-required in branch protection (labeled "informational") rather than
+  gating merges on it. The merged coverage gate (`scripts/coverage.sh
+  merged`, 92%+ locally) is not yet wired into CI.
 
 ## Commands
 
