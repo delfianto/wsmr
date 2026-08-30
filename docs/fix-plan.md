@@ -1390,16 +1390,18 @@ Finding: `Cargo.toml`, README, and repository guidance disagree on Rust/MSRV.
   failures (`fix-plan.md` Phase 4, not yet done). Building out a multi-image
   systemd matrix for a test that can currently report false positives would
   just multiply the false confidence, not reduce it. Revisit after Phase 4.
-- [!] Run functional Tier B in CI where privileged/rootful containers are
-  supported. Not done, same reason — Tier B needs Phase 4's hardening
-  *before* it's trustworthy enough to gate anything on, in CI or otherwise.
-  Wiring a known-unreliable test into CI now would be the exact failure mode
-  this whole review exists to fix. **Precondition now met, 2026-08-30**:
-  Phase 4/P4-03 is fully hardened (all 9 named scenarios implemented and
-  independently verified — see G2). The remaining work is now purely "wire
-  it into CI" (a new job, plus checking whether GitHub-hosted runners
-  actually support the privileged/rootful container Tier B needs), not
-  "wait for Tier B to be trustworthy" — genuinely unattempted, not blocked.
+- [x] Run functional Tier B in CI where privileged/rootful containers are
+  supported. **Done 2026-08-30**: a `tier-b` job in `.github/workflows/
+  ci.yml` runs the full happy path plus all 6 P4-03 failure scenarios on
+  every push/PR. Answers the question this bullet was actually waiting on:
+  GitHub-hosted `ubuntu-latest` runners support `podman run
+  --systemd=always` with no `--privileged` flag, no special setup beyond
+  `apt-get install podman`. Kept non-required in branch protection
+  ("informational" in the job name) rather than gating merges on it — see
+  the commit-sequence checklist's entry for the full story, including a
+  real product bug and a real test bug this found, plus one check that
+  stayed intermittently flaky on GitHub's runners specifically through
+  several rounds of fixes.
 - [x] If hosted CI cannot support it reliably, add scheduled/manual execution
   and publish its status/artifacts without claiming per-commit coverage.
   Interpreted "cannot support it reliably" as also covering "the test itself
@@ -2150,16 +2152,52 @@ Phase 7 evidence:
 - [x] `fix: harden desktop-entry and blocking syscall behavior` — Phase 5,
   not yet committed as of writing this line (commit follows this fix-plan
   update).
-- [!] `ci: run the Linux integration matrix` — genuinely not done, not a
-  stale checkbox: confirmed `.github/workflows/ci.yml` has zero references
-  to Tier A/B as of 2026-08-30. Still blocked on P6-02's own deferral (Tier
-  B needs privileged/rootful containers, and P4-03 wasn't fully hardened
-  until this same day), but **correcting the reason given**: this isn't an
-  access problem — `gh` here has `workflow` scope and could push a change
-  to `ci.yml` — it's unbuilt/unattempted work (a new CI job, and an open
-  question of whether GitHub-hosted runners actually support privileged
-  containers, that nobody has checked yet), not something this environment
-  is structurally barred from.
+- [x] `ci: run the Linux integration matrix` — **done 2026-08-30.** New
+  `tier-b` job in `.github/workflows/ci.yml`, deliberately named/labeled
+  "informational" and not required in branch protection: `apt-get install
+  podman` on a stock `ubuntu-latest` runner, no `--privileged` needed — the
+  open question from P6-02 ("do GitHub-hosted runners support the
+  privileged/rootful containers Tier B needs") is answered: **yes**,
+  `podman run --systemd=always` works out of the box. Runs both
+  `scripts/linux-integration.sh` (happy path) and all 6
+  `scripts/linux-integration-failures.sh` scenarios on every push/PR.
+
+  Built and iterated on a `ci/tier-b` branch via `workflow_dispatch` (not
+  directly on `main`) specifically so failed attempts wouldn't pollute
+  `main`'s CI history while iterating — merged once stable. That iteration
+  found real things, not just CI plumbing:
+
+  - **Real product bug, fixed**: `wsmr aux prepare-env`, if `SIGKILL`ed
+    while blocked on its loader shell (`Command::output()` blocks
+    synchronously), never runs its own `vars_<mark>` cleanup, permanently
+    orphaning that file — a genuine gap in the documented "abandoned prior
+    state" self-healing invariant, which didn't know about this filename
+    pattern. Fixed by sweeping `vars_*` during `restore_and_clear_locked`
+    (commit `d97c86c`), with a new test
+    (`end_generation_sweeps_a_stray_prepare_env_vars_file`).
+  - **Real test bug, fixed**: `smoke-finalize-partial-failure.sh`'s
+    "compositor unit ended up failed" check had no retry loop at all,
+    unlike every sibling check in the file (`d97c86c`).
+  - **One check remained intermittently flaky on GitHub's runners
+    specifically** (never reproduced locally, roughly 5 of 11 CI attempts)
+    even after that fix. Chased through several plausible-but-wrong
+    hypotheses in order — journald indexing lag (a longer retry alone
+    didn't fix it), `journalctl --sync` (didn't fix it), then discovering
+    mid-chase that querying live systemd state instead of the journal is
+    actually *wrong* for this unit specifically (`CollectMode=inactive-
+    or-failed` means systemd forgets it almost instantly — confirmed by
+    that exact query coming back empty even locally), then ANSI
+    colorization of elevated-priority journal lines (`SYSTEMD_COLORS=0`,
+    also didn't fix it on its own). The check then passed 5 consecutive
+    times with byte-level (`cat -A`/`journalctl -o json`) diagnostics
+    armed and ready to capture the next failure, which never came in that
+    window. **Honest bottom line**: merged with `--sync` +
+    `SYSTEMD_COLORS=0` + a widened retry window all still in place (cheap,
+    harmless, each independently well-justified even without a confirmed
+    single smoking gun), and the job stayed non-required/"informational"
+    in branch protection specifically because of this residual
+    uncertainty — a deliberate hedge decided before any of this was known,
+    validated by how it played out.
 - [x] `docs: align support, compatibility, and verification claims` — Phase
   6, not yet committed as of writing this line (commit follows this
   fix-plan update).
