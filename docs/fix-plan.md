@@ -2176,13 +2176,25 @@ document) before being checked off.
   refactor, not just before it): all 19 `PASS:` lines, zero `|| true` on a
   claimed behavior. All 6 of `scripts/linux-integration-failures.sh`'s
   scenarios re-run the same way: all `PASSED`.
-- [ ] The authoritative merged coverage gate passes when configured. Not a
-  stale checkbox — genuinely never run, anywhere in this document's
-  history (confirmed by grep: coverage is discussed only as a goal/local
-  gate, never as an executed result). Real, sizable work still to do:
-  `scripts/coverage.sh merged`, gated at `--fail-under-lines 90`, hasn't
-  been attempted this session or, as far as this tracker's history shows,
-  ever.
+- [x] The authoritative merged coverage gate passes when configured. **Run
+  for the first time ever 2026-08-30** (confirmed via grep: never attempted
+  anywhere in this document's history before now). `scripts/coverage.sh
+  merged` initially failed on two genuine first-run findings, both fixed
+  (commit `18ad945`): `Containerfile.coverage` never installed `socat`
+  (which `stub-compositor.sh` needs — every other Tier-B-capable image has
+  it), and `smoke.sh`'s teardown check
+  (`pgrep -f stub-compositor.sh`) false-positived against the coverage
+  harness's own invocation (`coverage-run.sh`'s `runuser -u tester -- env
+  ... STUB=/workspace/.../stub-compositor.sh ... bash smoke.sh` keeps that
+  path string visible in `runuser`'s own argv for as long as smoke.sh runs,
+  since `runuser` supervises its child via PAM rather than exec-replacing
+  itself) — root-caused via a one-off diagnostic `ps` dump, not guessed,
+  and fixed by anchoring the pattern to the end of the command line
+  (`stub-compositor\.sh$`), which a genuine compositor invocation's argv
+  satisfies but the harness wrapper's doesn't. After both fixes: **passes
+  cleanly, confirmed on 3 independent runs, exit 0** — 92.12% line coverage
+  (6802 lines, 536 missed), 91.44% function coverage (911 functions, 78
+  missed), both comfortably above the 90% line gate.
 - [x] The disposable-user CachyOS/Hyprland test passes twice consecutively.
   Phase 7's own acceptance criteria already established this — see "A
   second login/logout cycle also passes" above (two clean start→verify→stop
