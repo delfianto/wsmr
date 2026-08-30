@@ -54,19 +54,19 @@ verification command or evidence in the phase's evidence section.
   generation lock/scope actually clean up correctly outside of unit tests.
   Same residual gap as G0: no live test yet forces the late-`cleanup-env`
   race or a failed generation described in Phase 1's evidence.
-- [~] **G2 — Credible Tier B:** Phase 4's happy path and its two implemented
+- [x] **G2 — Credible Tier B:** Phase 4's happy path and its two implemented
   failure scenarios (duplicate start, stop-when-stopped) pass with zero
   ignored functional failures — see Phase 4 evidence for the full PASS list
-  and the real bugs this caught along the way. **Extended 2026-08-30**: 3
-  more P4-03 scenarios landed and independently re-confirmed passing
-  (compositor exits before readiness, readiness timeout, cleanup after an
-  unclean compositor exit — `scripts/linux-integration-failures.sh`), and
-  the existing happy-path smoke was re-run to confirm it's unregressed (all
-  19 `PASS:` lines). **Still not fully closed**: 3 of P4-03's 9
-  failure/recovery scenarios remain explicitly deferred (prepare-env
-  failure, interrupted start/generation, finalize partial failure) — each
-  needs its own broken-fixture variant and container boot, cut for
-  wall-clock budget reasons, not attempted-and-failed.
+  and the real bugs this caught along the way. **Closed 2026-08-30**: all 6
+  remaining P4-03 scenarios landed in two batches the same day (compositor
+  exits before readiness, readiness timeout, unclean compositor exit;
+  then prepare-env failure, interrupted start/generation, finalize partial
+  failure — `scripts/linux-integration-failures.sh`), each independently
+  re-confirmed passing before merge, both individually and as a final
+  combined 6-scenario run, alongside the original happy-path smoke
+  (unregressed, all 19 `PASS:` lines). All 9 of P4-03's named scenarios are
+  now implemented; the FIFO scenario's narrower "stale FIFO" sub-case
+  remains unit-tested only, not at this integration level (see P4-03).
 - [~] **G3 — Real machine:** Phase 7 passes under a disposable CachyOS user
   before claiming CachyOS/Wayland/Hyprland runtime support. **Substantial
   partial evidence as of 2026-08-29** (see Phase 7 evidence): a real
@@ -959,18 +959,54 @@ Findings:
   `graphical-session.target` never activates, the hung compositor and its
   `socat` child are torn down by the shutdown cascade, and the environment
   is restored. Confirmed independently: `PASSED`.
-- [ ] prepare-env failure. Not implemented — cut for wall-clock budget (see
-  the scope note below); each scenario built this pass already took
-  multiple container-boot debug iterations.
+- [x] prepare-env failure. **Implemented 2026-08-30**
+  (`scripts/linux-integration-failures.sh prepare-env-failure`,
+  `tests/integration/smoke-prepare-env-failure.sh`): a broken
+  `$XDG_CONFIG_HOME/wsmr/env` (sourced via `.` into `prepare-env.sh`'s own
+  shell, so a bare `exit 1` aborts the whole loader, not a subshell) fails
+  `wayland-wm-env@*.service` before the compositor's own unit ever starts
+  (ordering held). Asserts the failure, the ordering, that
+  `graphical-session.target`/`WAYLAND_DISPLAY` never activate, the shutdown
+  cascade tears the pre-readiness graph down, and the environment restores.
+  Confirmed independently: `PASSED`. **Incidental finding, not fixed (out
+  of scope)**: `session::prepare::run_loader` calls
+  `dump::parse_shell_dump(&stdout, mark)?` before checking
+  `output.status.success()`, so when the loader shell exits before printing
+  its closing mark, the generic "could not resolve env output mark" error
+  wins and the child's actual stderr (which would show the real broken-
+  config reason) is silently dropped. Correctness is unaffected — the unit
+  still fails and the graph still tears down cleanly — but a real user
+  hitting this gets a less specific diagnostic than they could. Worth a
+  look if diagnostic quality here matters later.
 - [x] Duplicate start. Asserted: a second `wsmr start` while a session is
   active fails, its stderr mentions "already active", and the *original*
   compositor unit is still active afterward (the refusal doesn't disturb the
   running session).
 - [x] Stop when already stopped. Asserted: `wsmr stop` after a clean stop
   still exits 0 (a documented no-op, not an error).
-- [ ] Interrupted start/generation. Not implemented — same wall-clock-budget
-  reason.
-- [ ] Finalize partial failure. Not implemented — same reason.
+- [x] Interrupted start/generation. **Implemented 2026-08-30**
+  (`scripts/linux-integration-failures.sh interrupted-start`,
+  `tests/integration/smoke-interrupted-start.sh`): rather than one flaky,
+  precisely-timed `SIGKILL` against `wsmr start`'s sub-second generation/
+  reload/exec sequence, fuzzes 5 kill points at varying tiny delays
+  (0.01–0.05s, full cleanup between each) and asserts the actual invariant
+  — a subsequent clean `wsmr start` still succeeds with no manual cleanup,
+  the environment restores, and no failed units or stale state remain. A
+  scripted, repeatable version of Phase 7's incidental stale-binary self-
+  heal finding, and a stronger property test than hitting one exact timing
+  window would be. Confirmed independently: `PASSED`.
+- [x] Finalize partial failure. **Implemented 2026-08-30**
+  (`scripts/linux-integration-failures.sh finalize-partial-failure`,
+  `tests/integration/{smoke-finalize-partial-failure,stub-compositor-badnotify}.sh`):
+  a stub compositor calls `wsmr finalize` with `systemd-notify` shadowed by
+  an always-failing stand-in — finalize's env-export half succeeds (its own
+  exec-chain proves this) and only the readiness-notify half fails, killing
+  the compositor's own process. Distinct from the already-fixed
+  `$NOTIFY_SOCKET`-context bug from the original Phase 4 work. Asserts the
+  compositor unit ends up cleanly `failed` (not stuck `activating`), the
+  cascade tears the graph down, and — the actual "partial" property this
+  scenario names — the environment fully restores despite the successful
+  half's exports having already landed. Confirmed independently: `PASSED`.
 - [x] App-daemon missing reader or stale FIFO. "Missing reader" is covered at
   the integration level: `smoke.sh` sends `ping` without reading the reply,
   waits past the 5s `SEND_TIMEOUT`, then confirms the daemon is still alive
@@ -993,20 +1029,19 @@ Findings:
   no-op, and that the environment/failed-units/stale-runtime-state checks
   all come back clean. Confirmed independently: `PASSED`.
 
-**Scope note on the three still-unimplemented P4-03 scenarios** (prepare-env
-failure, interrupted start/generation, finalize partial failure): each needs
-either a deliberately-broken stub-compositor variant, a way to kill the
-compositor mid-lifecycle from outside its own unit, or its own container
-boot to avoid one broken scenario corrupting the systemd state the next
-scenario in the same run depends on. Given the real wall-clock cost of
-iterating on full Podman systemd-as-PID-1 boots (each debugging iteration
-takes several minutes, both for the original duplicate-start/stop-when-
-stopped pair and for the three scenarios added 2026-08-30), building out the
-remaining three was cut from this pass as a pragmatic budget decision, not
-attempted-and-failed. The five now implemented (duplicate start,
-stop-when-stopped, plus the three added 2026-08-30) were chosen as the
-cheapest to add correctly without new fixtures or container-state risk.
-Left as explicit follow-up work, not silently dropped.
+**All 9 P4-03 scenarios are now implemented as of 2026-08-30** (6 landed in
+two batches the same day: `crash-before-readiness`/`readiness-timeout`/
+`unclean-exit` first, `prepare-env-failure`/`interrupted-start`/
+`finalize-partial-failure` second; duplicate-start and stop-when-stopped
+predate them; the FIFO scenario's "missing reader" half is covered
+separately, see above). Each of the 6 new ones got its own deliberately-
+broken stub-compositor variant and its own container boot, exactly per the
+original scope note's reasoning (one broken scenario must not corrupt state
+a later one in the same run depends on) — `scripts/linux-integration-
+failures.sh` now runs all 6 this way. Every scenario was independently
+re-run (not just taken on the implementing agent's report) before being
+merged, both individually and as a final combined 6-scenario run, alongside
+a re-run of the original unmodified happy path to confirm zero regression.
 
 Acceptance criteria:
 
@@ -1049,26 +1084,30 @@ Phase 4 evidence:
   product) were caught as hard failures during development of this phase,
   itself evidence the smoke test fails on real breakage rather than passing
   through it.
-- [x] **2026-08-30 extension**: 3 more scenarios implemented
+- [x] **2026-08-30 extension, batch 1**: 3 scenarios implemented
   (`scripts/linux-integration-failures.sh`, commit `fabd360`) — compositor
   exits before readiness, readiness timeout, cleanup after an unclean
   compositor exit. Independently re-run (not just taken on the implementing
   agent's report): all three `PASSED`, and the unmodified
   `scripts/linux-integration.sh` happy path was re-run alongside them and
-  still shows all 19 `PASS:` lines — confirms no regression. 3 of 9 P4-03
-  scenarios remain deferred (prepare-env failure, interrupted
-  start/generation, finalize partial failure).
+  still shows all 19 `PASS:` lines — confirms no regression.
+- [x] **2026-08-30 extension, batch 2**: the final 3 scenarios implemented
+  (commit `70c8012`) — prepare-env failure, interrupted start/generation,
+  finalize partial failure. Independently re-run: all 6
+  `linux-integration-failures.sh` scenarios `PASSED` together, and the
+  original happy path re-confirmed unregressed again. All 9 of P4-03's
+  named scenarios are now implemented.
 - [x] Collected artifact location: local only — `scripts/linux-integration.sh`
   output captured to the session scratchpad during iteration; not persisted
   to the repo or CI (no CI runner available from this environment, same
   caveat as Phase 6's `msrv` job).
 
-G2 is now met for everything Phase 4 itself covered: passes without ignored
-functional failures for the happy path and for the two implemented failure
-scenarios. (P4-03 gained 3 more scenarios on 2026-08-30, closing more of the
-original 6-scenario gap — see P4-03 and the G2 gate above for current
-status.) It is **not** met for the scenarios still deferred — those remain
-open, tracked above rather than folded into a blanket "G2 closed" claim.
+**G2 is now fully met**: Phase 4's happy path plus all 9 of P4-03's named
+failure/recovery scenarios pass with zero ignored functional failures (see
+P4-03 and the G2 gate above for the full list and evidence). The only
+narrower residual gap is the FIFO scenario's "stale FIFO" sub-case, which
+remains unit-tested only rather than exercised at this integration level —
+tracked in P4-03 itself, not a blocker on G2.
 
 ---
 
