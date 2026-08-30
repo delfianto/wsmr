@@ -95,8 +95,12 @@ verification command or evidence in the phase's evidence section.
   no pre/post environment-restoration diff was captured for the 2026-08-30
   primary-account run — only unit-graph and app-launcher health were
   checked there. The three unrestored env vars from 2026-08-29
-  (`XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX`) were separately
-  root-caused as pre-existing manager state, not a wsmr defect (see P7-03).
+  (`XDG_SESSION_DESKTOP`/`XDG_BACKEND`/`XDG_MENU_PREFIX`) turned out to be
+  mostly wsmr's own tracked exports (all but `XDG_BACKEND` are in
+  `varnames::ALWAYS_CLEANUP_BASE`), correctly cleaned up on a clean stop
+  per `docs/known-issues.md`'s own prior finding — their persistence on
+  `geist`'s account is most likely leftover residue from an earlier
+  session crash, not a cleanup gap (see P7-03's corrected entry).
 
 ## Current baseline
 
@@ -1682,31 +1686,46 @@ the dated findings inside P7-03 below.
   genuinely unknown either way from today's evidence. A repeat run capturing
   a real pre-start baseline would resolve this cleanly.
 
-  **Resolved, non-destructively, 2026-08-30 on the primary `geist`
-  account.** `systemctl show user@1000.service -p ActiveEnterTimestamp` →
-  `Fri 2026-08-28 20:52:43` — the systemd **user manager itself** (the
-  process holding the activation-environment dictionary
-  `systemctl --user show-environment` reads) has been running continuously
-  since two days before this investigation, and before the very first
-  `wsmr start` attempt on this account. `XDG_SESSION_DESKTOP=Hyprland`,
-  `XDG_BACKEND=wayland`, and `XDG_MENU_PREFIX=arch-` (the live value today —
-  not `hyprland-` as guessed on 2026-08-29) are present in that long-lived
-  manager's environment, but none of the three appear in `varnames.rs`'s
-  `SESSION_SPECIFIC` list, Hyprland's own literal `import-environment`/
-  `unset-environment` strings, or `/etc/pam.d/greetd`'s session stack in any
-  form that would export them into the *manager's* activation environment
-  specifically (as opposed to the login session's own process environment,
-  a different store). Combined, this places their origin before any
-  wsmr-managed session in this manager's multi-day lifetime — most likely
-  set by whichever session ran first after this manager started (this
-  account's normal daily driver is uwsm-managed) — and confirms nothing in
-  wsmr's start/stop lifecycle is responsible for exporting or restoring
-  them. **Conclusion: not a wsmr defect** — wsmr correctly restores 100% of
-  what it itself exports; these three were never wsmr's (or, per the
-  evidence here, Hyprland's) to clean up. Downgraded from "root cause not
-  pinned down" accordingly; the *other* two vars (`WAYLAND_DISPLAY`,
-  `XDG_CURRENT_DESKTOP`) remain a confirmed Hyprland-binary bug, unaffected
-  by this finding.
+  **Investigated 2026-08-30 on the primary `geist` account — corrected
+  later the same day after checking `docs/known-issues.md`'s own prior,
+  more rigorous finding on this exact question.** The first pass found `systemctl show user@1000.service -p ActiveEnterTimestamp` →
+  `Fri 2026-08-28 20:52:43` (the manager predates the first `wsmr start` on
+  this account by two days) and checked `varnames.rs`'s `SESSION_SPECIFIC`
+  list, concluding none of the three were wsmr's concern. **That check used
+  the wrong list.** `SESSION_SPECIFIC` (`XDG_SEAT`/`XDG_SEAT_PATH`/
+  `XDG_SESSION_ID`/`XDG_SESSION_PATH`/`XDG_VTNR`) is unrelated;
+  `ALWAYS_CLEANUP_BASE` (`varnames.rs:50-63`) is the one that actually
+  governs stop-time cleanup, and it **explicitly includes**
+  `XDG_CURRENT_DESKTOP`, `XDG_MENU_PREFIX`, and `XDG_SESSION_DESKTOP` — all
+  three of the previously-mysterious vars except `XDG_BACKEND`. This
+  matches `docs/known-issues.md`'s own already-existing, more carefully
+  controlled finding (a clean disposable-account start/stop cycle,
+  verified from an explicitly-cleared baseline): these three are wsmr's own
+  `-D Hyprland` desktop-name exports, and `always_cleanup()` correctly
+  scrubs them on every clean `wsmr stop`.
+
+  **Corrected conclusion**: their persistence in `geist`'s long-lived
+  manager isn't evidence they predate wsmr's involvement — it's much more
+  likely residue from a session that never reached a clean stop at all
+  (this conversation independently found two real crashes on this exact
+  account/manager: the Hyprland `CCompositor::cleanup()` SIGSEGV and the
+  `xdg-desktop-portal-hyprland` teardown SIGSEGV, both discussed above and
+  in `docs/known-issues.md`). A crash skips wsmr's cleanup code path
+  entirely — there's no partial-cleanup gap to fix here, just the ordinary,
+  already-understood consequence of a session dying before it ever reaches
+  `wsmr stop`/`cleanup_env`. **`XDG_BACKEND` is the one genuine exception**:
+  it appears nowhere in `varnames.rs`, nowhere in Hyprland's own embedded
+  `import-environment`/`dbus-update-activation-environment` strings
+  (confirmed by grep against both), and `known-issues.md`'s attribution of
+  it to "wsmr's own `-D Hyprland` desktop-name handling" doesn't hold up
+  against the current source — that specific claim there is itself
+  imprecise and worth a follow-up correction. Its real origin remains
+  unknown. The `WAYLAND_DISPLAY`/`XDG_CURRENT_DESKTOP` re-export bug itself
+  is unaffected by any of this — still a confirmed Hyprland-binary defect,
+  already fully mitigated on this very account via
+  `HYPRLAND_NO_SD_VARS=1` (confirmed present in both
+  `~/.config/wsmr/env-hyprland` and the live manager environment) per
+  `docs/known-issues.md`'s existing, separately-verified fix.
 
   This is a real difference from Phase 4's Tier-B smoke test, where the
   stub compositor explicitly calls `wsmr finalize` itself and the full
