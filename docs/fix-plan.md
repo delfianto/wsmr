@@ -2218,12 +2218,12 @@ document) before being checked off.
   rather than silently passed), but literally not all of them are `[x]`.
   Left `[~]` rather than `[x]` so this line doesn't imply every criterion
   fully closed — see the per-phase sections and the G0–G3 gates for exactly
-  which remain `[~]`/`[!]` and why. **Note**: "no CI access" is no longer
-  one of those reasons as of 2026-08-30 (see P6-01/P6-03's corrected
-  entries — `gh` access was available the whole time); the genuine
-  remaining structural gaps are no second Linux distro to test against and
-  no real interactive VT login available here, plus Tier B genuinely not
-  being wired into CI yet (an unbuilt feature, not an access problem).
+  which remain `[~]`/`[!]` and why. **Note, updated later 2026-08-30**: two
+  of the reasons this line used to give are now resolved — "no CI access"
+  was never actually true (see P6-01/P6-03's corrected entries), and Tier B
+  *is* now wired into CI (see P6-02). The genuine remaining structural gaps
+  are down to: no second Linux distro to test against, and no real
+  interactive VT login available here for P7-04's last two scenarios.
 - [x] `cargo fmt --check` passes. Re-run 2026-08-30: clean.
 - [x] `cargo clippy --all-targets --all-features -- -D warnings` passes.
   Re-run 2026-08-30: clean.
