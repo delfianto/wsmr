@@ -44,7 +44,7 @@ verification command or evidence in the phase's evidence section.
   Tier-B/container scenario, not a unit-test one) remains explicitly
   deferred, and `session::state::begin_generation`/`end_generation` (a
   different module from `start::run`) still has no seam of its own.
-- [~] **G1 — Safe state handling:** Phases 0 and 1 are complete before a real
+- [x] **G1 — Safe state handling:** Phases 0 and 1 are complete before a real
   Hyprland login is attempted. Locking/atomicity/generation-scoping is done
   and unit-tested (including a genuine concurrent-OS-thread test); **also
   partially closed by Phase 4**: `begin_generation`/`end_generation` ran for
@@ -52,8 +52,20 @@ verification command or evidence in the phase's evidence section.
   no-stale-state assertion (which caught and led to fixing a real
   `cleanup_env` gap — see Phase 4 evidence) is direct live proof the
   generation lock/scope actually clean up correctly outside of unit tests.
-  Same residual gap as G0: no live test yet forces the late-`cleanup-env`
-  race or a failed generation described in Phase 1's evidence.
+  **Closed 2026-08-30**: the one seam this gate was actually waiting on —
+  `session::state`'s `restore_and_clear_locked` (shared by
+  `begin_generation`'s abandoned-prior-state resolution and
+  `end_generation`) took a concrete `&SessionBus` — now has its own
+  `StateOps` trait (`src/sysd/dbus.rs`, same pattern as `SessionOps`/
+  `EnvUpdateOps`). New tests cover the actual restore/unset decision logic
+  (a pre-existing var restored via `set_systemd_vars`, a session-only var
+  unset, an untracked live var left alone), the documented fail-closed
+  behavior on a bus failure (state files survive so a retry can still act
+  on them — previously only asserted in a comment), and `begin_generation`
+  resolving an abandoned prior generation before establishing a new one.
+  The late-`cleanup-env`-race scenario from Phase 1's evidence remains
+  untested (it's a live/Tier-B timing scenario, not a unit-test one), but
+  is a narrower residual note now, not a missing seam.
 - [x] **G2 — Credible Tier B:** Phase 4's happy path and its two implemented
   failure scenarios (duplicate start, stop-when-stopped) pass with zero
   ignored functional failures — see Phase 4 evidence for the full PASS list
@@ -107,17 +119,18 @@ verification command or evidence in the phase's evidence section.
 - Host: CachyOS, Wayland, Hyprland 0.56.2, systemd 261, dbus-broker.
 - The active desktop is managed by uwsm 0.26.7, not wsmr.
 - Formatting, clippy, and build checks pass.
-- Unit tests currently report **243 passing, 0 failing** (224 lib + 18 in the
+- Unit tests currently report **247 passing, 0 failing** (228 lib + 18 in the
   `wsmr` binary's own test target + 1 integration test comparing generated
   units against a real uwsm 0.26.7 install, Phase 6) — the 3 originally
   pre-existing host-dependent failures were root-caused and fixed in Phase 3
   (an XDG-dirs test-isolation bug and a hardcoded system-bus dependency).
-  Was 166/3 before Phase 0. 2026-08-30 added 9 lib tests: 2 for Phase 7's
+  Was 166/3 before Phase 0. 2026-08-30 added 13 lib tests: 2 for Phase 7's
   reclaim-stale fix
   (`reclaim_stale_adopts_a_foreign_dropin_instead_of_blocking`,
-  `reclaim_stale_never_applies_to_the_static_graph`) and 7 for the G0/G1
+  `reclaim_stale_never_applies_to_the_static_graph`), 7 for the G0/G1
   `SessionOps`/`EnvUpdateOps` mocking seam (2 in `session::start`, 5 in
-  `sysd::dbus`). Verified in both the native CachyOS
+  `sysd::dbus`), and 4 for G1's `StateOps` seam in `session::state`.
+  Verified in both the native CachyOS
   host and the clean Linux container after every phase, including Phase 2,
   where the container caught a genuinely new host-dependence bug this
   session introduced (see Phase 2 evidence) — the two-environment habit paid
