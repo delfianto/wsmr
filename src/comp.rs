@@ -1,8 +1,6 @@
 //! Compositor argument classification and resolution.
 //!
-//! Ports `MainArg` (`main.py:188`) and the **bare-executable** branch of
-//! `fill_comp_globals` (`main.py:3965`/`:4292`). Desktop-entry compositor
-//! resolution is deferred to M3. See `docs/architecture.md`.
+//! Handles executable commands and desktop entries.
 
 use crate::app::entry::DesktopEntry;
 use crate::app::find;
@@ -46,8 +44,7 @@ impl MainArg {
 
             let mut entry_id = id;
             if entry_id.contains('/') {
-                // path to an entry: keep basename as id (data-dir relpath
-                // refinement deferred to M5)
+                // For an explicit path, use its basename as the entry ID.
                 let p = normalize_user_path(&entry_id);
                 entry_id = p
                     .file_name()
@@ -100,7 +97,7 @@ pub struct CompGlobals {
     pub cli_desktop_names_exclusive: bool,
 }
 
-/// Inputs to compositor resolution (the `start`-relevant subset for M0).
+/// Inputs to compositor resolution.
 #[derive(Debug, Default)]
 pub struct ResolveInput {
     /// Compositor command line (arg0 + args).
@@ -118,9 +115,7 @@ pub struct ResolveInput {
 }
 
 impl CompGlobals {
-    /// Resolve a **bare-executable** compositor command (the priority case, as
-    /// SDDM passes a plain command). Desktop-entry args return
-    /// [`Error::NotImplemented`].
+    /// Resolve a compositor command from an executable or desktop entry.
     pub fn resolve(input: &ResolveInput) -> Result<CompGlobals> {
         let arg0 = input
             .wm_cmdline
@@ -193,7 +188,7 @@ fn resolve_entry(input: &ResolveInput, main: &MainArg, entry_id: &str) -> Result
     // id = the entry id verbatim, `.desktop` suffix and all (units become
     // wayland-wm@<id>) — upstream never strips it here either: CompGlobals.id
     // is set to the raw main-argument basename *before* entry resolution even
-    // runs (`main.py:3961`), so a `foo.desktop` argument keeps that literal
+    // runs, so a `foo.desktop` argument keeps that literal
     // id. Confirmed live against a running uwsm session: its compositor
     // unit is `wayland-wm@hyprland.desktop.service`, not `wayland-wm@hyprland...`.
     let id = entry_id.to_string();

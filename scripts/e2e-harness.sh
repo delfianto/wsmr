@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Real-hardware harness for the disposable-user, real-compositor session
-# (see arch/README.md for setup), verified the same way every other tier in
+# (see arch/e2e.md for setup), verified the same way every other tier in
 # this repo is - real scripted assertions with a real exit
 # code, not a transcript of commands someone ran by hand once.
 #

@@ -1,6 +1,4 @@
-//! The systemd unit graph (embedded verbatim from upstream `systemd/user/*`)
-//! plus per-compositor `50_custom.conf` drop-in generation
-//! (ports `generate_dropins`, `main.py:1389`). See `REFERENCE.md` §14.
+//! The systemd unit graph plus per-compositor `50_custom.conf` generation.
 //!
 //! Static units are kept byte-identical to upstream so they can be diffed
 //! against the reference. Service units carry `@BIN_PATH@` / `@BIN_NAME@` /
@@ -270,8 +268,8 @@ Before=wayland-session-shutdown.target
 
 /// Fixed, non-compositor-specific drop-ins fixing common desktop-integration
 /// issues (autostart app slicing/ordering, flatpak scope ordering, a KDE
-/// portal ordering hotfix). Ported verbatim from `generate_tweaks`
-/// (`main.py:1533`); toggled by `start -t`/`-T` (`X-UWSMMark=tweaks`, so
+/// portal ordering hotfix). Toggled by `start -t`/`-T`
+/// (`X-UWSMMark=tweaks`, so
 /// `stop -r tweaks` removes only these).
 pub const TWEAKS: &[UnitTemplate] = &[
     UnitTemplate {
@@ -438,7 +436,7 @@ pub fn service_dropin(input: &DropinInput) -> Option<String> {
     }
 }
 
-/// Join arguments with POSIX shell quoting (mirrors Python `shlex.join`).
+/// Join arguments with POSIX shell quoting.
 pub fn shlex_join(parts: &[String]) -> String {
     parts
         .iter()

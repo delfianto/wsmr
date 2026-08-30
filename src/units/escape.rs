@@ -1,5 +1,4 @@
-//! systemd unit-string escaping, ported from `simple_systemd_escape` and
-//! `char2cesc` (`main.py:1010`/`:1015`). See `REFERENCE.md` §8.2.
+//! systemd unit-string and C-style escaping.
 
 /// C-style `\xHH` escape of every UTF-8 byte of `s`.
 pub fn char2cesc(s: &str) -> String {

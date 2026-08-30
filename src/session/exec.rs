@@ -1,6 +1,4 @@
-//! `aux exec`: spawn the readiness watcher as an independent child, then exec
-//! the compositor in the unit's cgroup. Ports the `aux exec` handler
-//! (`main.py:5066`). See `REFERENCE.md` §4.1/§5.
+//! Spawn the readiness watcher, then replace the helper with the compositor.
 //!
 //! uwsm forks + double-forks the watcher. We **spawn** it instead: zbus's
 //! async-io reactor thread does not survive `fork()`, so a forked watcher's

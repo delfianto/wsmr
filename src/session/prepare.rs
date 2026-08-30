@@ -1,7 +1,5 @@
-//! `prepare-env`: deduce session identity, run the shell loader, compute the
-//! environment delta, and push it to the activation environments.
-//! Ports `prepare_env` (`main.py:2682`) + `prepare-env.sh`. See `REFERENCE.md`
-//! §3.2/§3.3.
+//! Deduce session identity, run the shell loader, compute the environment
+//! delta, and update the activation environments.
 
 use crate::comp::CompGlobals;
 use crate::env::{delta, dump, files};
@@ -128,9 +126,6 @@ fn deduce_session_with(
     env_login.insert("XDG_SESSION_ID".into(), sid);
     env_login.insert("XDG_SEAT".into(), seat);
 
-    // TODO(M3 fallback): if no wayland-session-bindpid@*.service is active,
-    // start one on the session leader PID (best-effort login-session bind).
-
     save_session_conf(env_login)
 }
 
@@ -216,7 +211,7 @@ fn aux_vars(comp: &CompGlobals, mark: &str, have_login: bool) -> String {
     lines.join("\n") + "\n"
 }
 
-/// Minimal POSIX shell quoting (mirrors Python `shlex.quote`).
+/// Minimal POSIX shell quoting.
 fn sh_quote(s: &str) -> String {
     if s.is_empty() {
         return "''".to_string();

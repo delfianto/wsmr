@@ -14,7 +14,7 @@
 # Rerunning after a code change rebuilds and reinstalls at the (possibly new)
 # version path and regenerates the session entry — safe to run repeatedly.
 #
-# What it deliberately does NOT do — the rest of arch/README.md's setup, on
+# What it deliberately does NOT do — the rest of arch/e2e.md's setup, on
 # purpose: create the disposable test user, write that user's Hyprland
 # config, touch /usr/bin/wsmr or the primary user's account, or run any part
 # of the actual verification harness (see scripts/e2e-harness.sh for that).
@@ -49,6 +49,6 @@ cat <<EOF
 ==> done.
     Installed binary: $DEST_DIR/wsmr
     Session entry:    $SESSION_DIR/wsmr-e2e.desktop
-    Next: arch/README.md's disposable-user and Hyprland-config steps,
+    Next: arch/e2e.md's disposable-user and Hyprland-config steps,
     then scripts/e2e-harness.sh prepare/verify/post-logout.
 EOF

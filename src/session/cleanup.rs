@@ -1,6 +1,4 @@
-//! `cleanup-env`: scrub session-added variables and restore the pre-session
-//! activation environment. Ports `cleanup_env` (`main.py:2922`).
-//! See `REFERENCE.md` §6.
+//! Remove session-added variables and restore the pre-session environment.
 
 use crate::error::Result;
 use crate::session::{runtime_path, state};

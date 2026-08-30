@@ -1,10 +1,7 @@
 //! On-disk unit generation: rung resolution and applying a validated
-//! [`GenerationPlan`]/[`RemovalPlan`] (see [`super::plan`]) to disk.
-//! Ports `update_unit`/`remove_unit`/`get_unit_path`
-//! (`main.py:1275`/`:1340`/`:1117`), extended with ownership tracking so
-//! generation and cleanup can never mutate a file wsmr doesn't verifiably
-//! own (see `docs/architecture.md`). `reload` lives in [`crate::sysd`] (M1+).
-//! See `REFERENCE.md` §8.2.
+//! [`GenerationPlan`]/[`RemovalPlan`] (see [`super::plan`]) to disk. Ownership
+//! tracking prevents generation and cleanup from mutating files wsmr cannot
+//! verify. See `docs/architecture/generated-files.md`.
 
 use super::plan::{Conflict, GenerationPlan, RemovalPlan};
 use crate::error::{Error, Result};

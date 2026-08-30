@@ -1,7 +1,5 @@
-//! `aux app-daemon`: a long-running FIFO server that resolves `app` argument
-//! lines into `systemd-run` shell commands, so a thin client can launch apps
-//! without paying process startup each time. Ports `app_daemon`
-//! (`main.py:3815`). See analysis §6.
+//! Long-running FIFO server that resolves `app` arguments into `systemd-run`
+//! shell commands for thin clients.
 //!
 //! Protocol: the client writes a NUL-separated argv to `wsmr-app-daemon-in`; the
 //! daemon writes one shell line to `wsmr-app-daemon-out`:

@@ -1,6 +1,4 @@
-//! Minimal desktop-entry parser + validity checks. Ports the subset of pyxdg
-//! plus `check_entry_basic` / `check_entry_showin` (`main.py:424`/`:501`) that
-//! wsmr needs. See `REFERENCE.md` §13.5.
+//! Minimal desktop-entry parser and validity checks for the subset wsmr uses.
 
 use crate::app::field::{expand_str, tokenize_exec};
 use crate::error::{Error, Result};
@@ -102,12 +100,8 @@ impl DesktopEntry {
     /// Basic validity: `Type=Application` with a non-empty `Name`, not
     /// hidden, `TryExec` resolves, the action (if any) has its own group with
     /// a `Name` and `Exec`, and the effective `Exec` command is on `$PATH`.
-    /// Ports `check_entry_basic`'s non-pyxdg-validation checks
-    /// (`main.py:429`) — the required-`Type`/`Name` and action-group/
-    /// action-`Name`/action-`Exec` checks below are the ones pyxdg's own
-    /// `entry.validate()` would otherwise catch, which this parser doesn't
-    /// separately replicate (see module docs: "the subset of pyxdg... that
-    /// wsmr needs").
+    /// This checks the fields required for launching without attempting full
+    /// desktop-entry specification validation.
     pub fn check_basic(&self, action: Option<&str>) -> Result<()> {
         if self.get("Type", None) != Some("Application") {
             return Err(Error::InvalidArg(format!(
@@ -207,14 +201,9 @@ fn split_colon(s: &str) -> Vec<String> {
         .collect()
 }
 
-/// Resolve locale candidates by XDG's own precedence — `LANGUAGE`, `LC_ALL`,
-/// `LC_MESSAGES`, `LANG`, first non-empty wins outright (no merging across
-/// vars) — ported from `xdg.Locale.expand_languages`'s env lookup, the
-/// reference implementation upstream desktop-entry localization relies on
-/// (confirmed by reading `/usr/lib/python3.14/site-packages/xdg/Locale.py`
-/// on the dev host, where `python-pyxdg` is installed). `LANGUAGE` is the
-/// one that's meaningfully colon-separated (a preference list); splitting
-/// the others on `:` is harmless since a locale value never contains one.
+/// Resolve locale candidates in `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`
+/// order. The first non-empty variable wins; `LANGUAGE` may contain a
+/// colon-separated preference list.
 fn locale_candidates() -> Vec<String> {
     for var in ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"] {
         if let Ok(s) = std::env::var(var)
@@ -230,8 +219,7 @@ fn locale_candidates() -> Vec<String> {
     Vec::new()
 }
 
-/// Every locale variant to try, across every candidate language, deduped in
-/// first-seen order — ports `expand_languages`'s outer accumulation loop.
+/// Build the deduplicated locale-variant search order.
 fn locale_variant_chain() -> Vec<String> {
     let mut out = Vec::new();
     for lang in locale_candidates() {
@@ -244,11 +232,8 @@ fn locale_variant_chain() -> Vec<String> {
     out
 }
 
-/// `de_DE.UTF-8@mod` -> ["de_DE@mod","de_DE","de@mod","de"]. Ports
-/// `xdg.Locale._expand_lang`'s component-subset expansion (language,
-/// territory, and modifier parsed independently; the codeset is parsed out
-/// and discarded — pyxdg's own reference implementation never actually
-/// includes it in a candidate, despite detecting it).
+/// Expand `de_DE.UTF-8@mod` to
+/// `["de_DE@mod", "de_DE", "de@mod", "de"]`.
 fn locale_variants(loc: &str) -> Vec<String> {
     let no_codeset = loc.split('.').next().unwrap_or(loc); // strip .UTF-8
     let (base, modifier) = match no_codeset.split_once('@') {
@@ -491,9 +476,7 @@ Exec=firefox --new-window
     }
 
     /// Precedence must be `LANGUAGE`, then `LC_ALL`, then `LC_MESSAGES`, then
-    /// `LANG` — first *set* var wins outright, matching
-    /// `xdg.Locale.expand_languages` exactly (cross-checked directly against
-    /// the installed `python-pyxdg` source).
+    /// `LANG`; the first set variable wins outright.
     #[test]
     fn locale_precedence_language_then_lc_all_then_lc_messages_then_lang() {
         use crate::testutil::with_env;

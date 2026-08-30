@@ -1,5 +1,4 @@
-//! `stop` and `check is-active`. Ports `stop_wm` (`main.py:4391`) and
-//! `is_active` (`main.py:1189`). See `REFERENCE.md` §8.3.
+//! Session stopping and active-session checks.
 
 use crate::error::Result;
 use crate::sysd::dbus::{SessionBus, SessionOps};
@@ -14,11 +13,9 @@ use std::time::Duration;
 /// teardown, not just that one unit.
 const STOP_JOB_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// The upstream "generic" active-check unit set: any of these being
-/// active/activating means a session is up or coming up. Ports
-/// `check_units_generic` from `is_active` (`main.py:1207`) — narrower sets
-/// (just `wayland-wm@*.service`, or a single escaped instance) miss the
-/// window where a session is mid-startup in `*-pre@.target`.
+/// The generic active-check unit set. Any active or activating match means a
+/// session is up or starting. Narrower sets miss the window where a session is
+/// still starting in `*-pre@.target`.
 const GENERIC_ACTIVE_PATTERNS: &[&str] = &[
     "graphical-session-pre.target",
     "wayland-session-pre@*.target",
@@ -32,10 +29,8 @@ pub fn is_active(bus: &impl SessionOps) -> Result<bool> {
     is_active_for(bus, None)
 }
 
-/// Whether the named compositor (or, with `wm_id: None`, any
-/// compositor/graphical-session unit) is active/activating. Ports `is_active`
-/// (`main.py:1189`) including its `check_wm_id` selector — used by both the
-/// double-start refusal (`None`) and `check is-active <WM>` (`Some`).
+/// Whether the named compositor, or any compositor when no ID is given, is
+/// active or activating. Used by start and `check is-active`.
 pub fn is_active_for(bus: &impl SessionOps, wm_id: Option<&str>) -> Result<bool> {
     match wm_id {
         None => Ok(!bus
@@ -51,7 +46,6 @@ pub fn is_active_for(bus: &impl SessionOps, wm_id: Option<&str>) -> Result<bool>
 }
 
 /// The escaped `wayland-wm@<id>.service` unit name for compositor `id`.
-/// Ports the `check_wm_id` branch of `is_active` (`main.py:1218`).
 pub fn compositor_unit_name(id: &str) -> String {
     format!(
         "wayland-wm@{}.service",
@@ -81,7 +75,8 @@ pub struct StopOpts {
     pub dry_run: bool,
     /// `-r`: remove generated units after stopping. `Some("")` (bare `-r`)
     /// removes everything wsmr owns; `Some("id,tweaks")` removes only the
-    /// listed marks (see [`parse_marks`]); `None` means don't remove at all.
+    /// listed marks (see the internal `parse_marks` helper); `None` means don't
+    /// remove at all.
     pub remove: Option<String>,
     /// Rung to remove units from.
     pub rung: Rung,
@@ -89,8 +84,8 @@ pub struct StopOpts {
 
 /// Parse `-r`'s raw value into a mark filter for [`plan_remove_all`]: an
 /// empty string means "no filter" (`None`, remove everything removable);
-/// otherwise a comma-separated list of marks (a compositor id, or
-/// `"tweaks"`), matching upstream's `-r` value shape (`main.py:1933`).
+/// otherwise a comma-separated list of marks such as a compositor ID or
+/// `"tweaks"`.
 fn parse_marks(raw: &str) -> Option<Vec<String>> {
     let marks: Vec<String> = raw
         .split(',')

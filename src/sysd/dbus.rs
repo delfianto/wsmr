@@ -1,8 +1,7 @@
-//! Typed blocking D-Bus client, porting `uwsm/uwsm/dbus.py`.
+//! Typed blocking D-Bus client for systemd, logind, and notifications.
 //!
-//! **M1 scaffold:** the proxies and wrapper compile standalone, but connecting
-//! and calling only works against a live session/system bus — exercised by
-//! the Tier-B integration tests, not plain unit tests. See `REFERENCE.md` §8.1.
+//! Live calls require session and system buses and are exercised by the Tier B
+//! integration tests.
 
 // The D-Bus `Notify` method legitimately takes many parameters.
 #![allow(clippy::too_many_arguments)]
@@ -228,8 +227,8 @@ impl SessionBus {
         Ok(unit.id()? == "dbus-broker.service")
     }
 
-    /// Export variables to the systemd (and, for classic dbus-daemon, the D-Bus)
-    /// activation environment. Ports `set_systemd_vars` (`main.py:917`).
+    /// Export variables to systemd and, for classic dbus-daemon, the D-Bus
+    /// activation environment.
     ///
     /// **Ordering:** systemd is updated first, D-Bus second. systemd's
     /// activation environment is what almost everything downstream actually
@@ -237,22 +236,22 @@ impl SessionBus {
     /// leaves nothing applied at all; if the D-Bus step then fails, systemd
     /// is already correct and only the secondary D-Bus copy is left stale —
     /// reported as [`Error::PartialEnvUpdate`] so the caller knows exactly
-    /// which side needs a retry. The sequencing itself lives in
-    /// [`set_systemd_vars_with`], parameterized over [`EnvUpdateOps`] so it's
-    /// unit-testable without a live session bus.
+    /// which side needs a retry. The internal helper is parameterized over
+    /// [`EnvUpdateOps`] so the sequence can be tested without a live bus.
     pub fn set_systemd_vars(&self, vars: &BTreeMap<String, String>) -> Result<()> {
         set_systemd_vars_with(self, vars)
     }
 
-    /// Unset variables from the systemd (and, for classic dbus-daemon, the
-    /// D-Bus) activation environment. Ports `unset_systemd_vars` (`main.py:977`).
+    /// Unset variables from systemd and, for classic dbus-daemon, the D-Bus
+    /// activation environment.
     ///
     /// **Ordering:** the mirror image of [`Self::set_systemd_vars`] — D-Bus
     /// is cleared first, systemd second, so that if the systemd step fails,
     /// the variable is left *present* on the side almost everything reads
     /// rather than prematurely gone from it. Reported as
     /// [`Error::PartialEnvUpdate`] when the D-Bus step had already succeeded.
-    /// See [`unset_systemd_vars_with`] for the testable sequencing.
+    /// The internal `unset_systemd_vars_with` helper contains the testable
+    /// sequencing.
     pub fn unset_systemd_vars(&self, names: &[String]) -> Result<()> {
         unset_systemd_vars_with(self, names)
     }
@@ -326,10 +325,8 @@ impl SessionBus {
     /// Wait until the job queue no longer contains `job` (poll), or `timeout`
     /// elapses. Used after `reload`/`stop_unit`. `unit` is only for the
     /// timeout error message (systemd job objects don't carry the unit name
-    /// back). Bounded deliberately: neither systemd nor upstream's own
-    /// equivalent wait (`main.py:4394`, itself unbounded) guarantees a
-    /// job is ever removed from the queue — a stuck job must not hang the
-    /// caller forever.
+    /// back). The wait is bounded because a stuck job must not hang the caller
+    /// forever.
     ///
     /// This polls `ListJobs` rather than subscribing to systemd's
     /// `JobRemoved` signal; the latter would be preferable but needs
@@ -396,7 +393,7 @@ impl SystemBus {
     }
 
     /// Find the login session on a given VT for the current user. Returns
-    /// `(session_id, seat_id)`. Ports `get_session_by_vt` (`main.py:2592`).
+    /// `(session_id, seat_id)`.
     pub fn session_by_vt(&self, vtnr: u32) -> Result<Option<(String, String)>> {
         let uid = current_uid();
         for s in self.list_sessions()? {
@@ -413,7 +410,7 @@ impl SystemBus {
     }
 }
 
-/// Session/logind lookup used by [`crate::session::prepare::deduce_session`],
+/// Session/logind lookup used while `prepare-env` resolves the login session,
 /// abstracted so its branching logic is unit-testable without a live system
 /// bus. `SystemBus` is the production implementation; tests inject a fake.
 /// See `session::check::Probes` for the same pattern applied more broadly.
@@ -568,9 +565,8 @@ impl SystemBus {
         Ok(Some(u.active_state()?))
     }
 
-    /// Poll the system `graphical.target` (or any unit) until its `ActiveState`
-    /// is in `states`, or `timeout` elapses. Ports the gst gate of `start`
-    /// (`main.py:4754`).
+    /// Poll a system unit until its `ActiveState` is in `states`, or until the
+    /// timeout elapses.
     pub fn wait_for_unit(&self, unit: &str, states: &[&str], timeout: Duration) -> Result<bool> {
         let start = Instant::now();
         loop {
@@ -595,8 +591,7 @@ fn is_no_such_unit(e: &zbus::Error) -> bool {
     matches!(e, zbus::Error::MethodError(name, ..) if name.as_str() == "org.freedesktop.systemd1.NoSuchUnit")
 }
 
-/// Extract the compositor id from a `wayland-wm@<id>.service` unit name.
-/// Ports `extract_wm_id` (`main.py:1178`).
+/// Extract the compositor ID from a `wayland-wm@<id>.service` unit name.
 pub fn extract_wm_id(unit: &str) -> Option<String> {
     unit.strip_prefix("wayland-wm@")
         .and_then(|s| s.strip_suffix(".service"))

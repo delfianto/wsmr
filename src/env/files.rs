@@ -1,6 +1,4 @@
-//! Environment file (de)serialization and the cleanup-list file.
-//! Ports `save_env`/`load_env` (`main.py:2519`/`:2541`) and
-//! `append_to_cleanup_file` (`main.py:2361`). See `REFERENCE.md` §3.1/§11.
+//! Environment snapshot serialization and the generation-tagged cleanup list.
 
 use crate::error::{Error, Result};
 use crate::filter;

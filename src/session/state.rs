@@ -6,10 +6,9 @@
 //! run as **separate processes** and can race on these files — this module
 //! is the only place that touches them, so every caller gets the same
 //! locking and generation-scoping for free rather than having to remember it
-//! at each call site. Ports the various read/write points scattered across
-//! `main.py:2682`/`:2424`/`:5066`/`:2922`. See `REFERENCE.md` §3/§4/§6.
+//! at each call site.
 //!
-//! **Locking.** [`lock`] uses `std::fs::File::lock` — an OS-level advisory
+//! **Locking.** The internal `lock` helper uses `std::fs::File::lock` — an OS-level advisory
 //! lock (`flock(2)` on Unix) — so it has clean crash semantics for free: a
 //! process that dies while holding it has the lock released by the kernel
 //! when its file descriptor is closed, with no stale-lockfile cleanup

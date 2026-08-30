@@ -7,11 +7,9 @@
 #
 #   cd arch && makepkg -si
 #
-# This installs a normal /usr/bin/wsmr. It is *not* what the disposable E2E
-# test user needs — that needs a separate, versioned install path that
-# coexists with this one. Use arch/e2e-install.sh for that instead of
-# `pacman -U`ing this package on your daily-driver account. See
-# arch/README.md.
+# This installs a normal /usr/bin/wsmr. The disposable E2E user may test this
+# package, or arch/e2e-install.sh can install a versioned work-in-progress
+# binary without touching /usr/bin. See arch/packaging.md.
 
 pkgname=wsmr
 pkgver=0.1.0
@@ -59,10 +57,11 @@ package() {
 	cd "$_srcdir"
 	install -Dm0755 target/release/wsmr "$pkgdir/usr/bin/wsmr"
 	install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-	install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-	install -Dm0644 TODO.md "$pkgdir/usr/share/doc/$pkgname/TODO.md"
-	install -Dm0644 docs/architecture.md "$pkgdir/usr/share/doc/$pkgname/architecture.md"
-	install -Dm0644 docs/known-issues.md "$pkgdir/usr/share/doc/$pkgname/known-issues.md"
+	local docdir="$pkgdir/usr/share/doc/$pkgname"
+	install -Dm0644 README.md "$docdir/README.md"
+	install -dm0755 "$docdir/docs" "$docdir/arch"
+	cp -a docs/. "$docdir/docs/"
+	install -Dm0644 arch/README.md arch/packaging.md arch/e2e.md "$docdir/arch/"
 	# See arch/session/hyprland-wsmr.desktop's own header for why this is
 	# Hyprland-specific despite wsmr itself being compositor-agnostic.
 	install -Dm0644 arch/session/hyprland-wsmr.desktop \

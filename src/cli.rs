@@ -1,6 +1,5 @@
-//! Command-line surface (clap derive), mirroring uwsm's argparse tree minus the
-//! compositor `select` subcommand (out of scope — the display manager handles
-//! selection). See `docs/architecture.md`'s CLI surface section.
+//! Command-line surface, mirroring uwsm's argparse tree except for the omitted
+//! compositor selector. See `docs/commands.md`.
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -85,13 +84,7 @@ pub struct StartArgs {
     /// Colon-separated desktop names (sets XDG_CURRENT_DESKTOP).
     #[arg(short = 'D', long = "desktop-names")]
     pub desktop_names: Option<String>,
-    /// Append `-D` names to other sources (default; explicit opposite of `-e`).
-    ///
-    /// Deliberately reaches no behavior beyond parsing (matches upstream:
-    /// `-a`'s only effect is setting `desktop_names_exclusive = false`, which
-    /// is already the default) — its entire purpose is to exist as an
-    /// explicit, mutually-exclusive counterpart to `-e` for scripts/muscle
-    /// memory that expect it. Not a silently-unused option.
+    /// Append `-D` names to other sources (the default; opposite of `-e`).
     #[arg(
         short = 'a',
         long = "append",

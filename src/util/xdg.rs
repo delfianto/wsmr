@@ -1,5 +1,4 @@
-//! Minimal XDG base-directory resolution (std::env only) — the subset of pyxdg
-//! `BaseDirectory` that wsmr needs. See `REFERENCE.md` §11.
+//! Minimal XDG base-directory resolution using only `std::env`.
 
 use crate::error::{Error, Result};
 use std::path::PathBuf;
