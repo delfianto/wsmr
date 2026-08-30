@@ -209,7 +209,31 @@ fn restore_and_clear_locked(bus: &impl StateOps) -> Result<()> {
     for f in [&cleanup_p, &pre_p, &gen_path] {
         let _ = std::fs::remove_file(f);
     }
+    sweep_stray_prepare_vars();
     Ok(())
+}
+
+/// Remove any `vars_<mark>` files left behind by an interrupted
+/// `prepare-env` run (see `prepare::run_loader`): normally written just
+/// before the loader shell starts and removed right after it exits, but
+/// orphaned forever if the process is killed while blocked waiting on that
+/// shell — `Command::output()` blocks synchronously, so a `SIGKILL` there
+/// never reaches the inline cleanup. Since a `vars_*` leak can only happen
+/// alongside the generation it belongs to (`run_loader` always runs after
+/// `begin_generation` has already written `generation`/`env_pre`), sweeping
+/// it here — the same "resolve any abandoned prior state" point that
+/// already handles those — closes the gap at its natural place. Best
+/// effort: a missing/unreadable runtime dir is not an error here.
+fn sweep_stray_prepare_vars() {
+    let Ok(dir) = runtime_path("") else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with("vars_") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -371,6 +395,28 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    #[test]
+    fn end_generation_sweeps_a_stray_prepare_env_vars_file() {
+        let rt = rt_dir();
+        std::fs::create_dir_all(rt.join("wsmr")).unwrap();
+        with_env(&[("XDG_RUNTIME_DIR", Some(rt.to_str().unwrap()))], || {
+            fsutil::atomic_write_path(&generation_path().unwrap(), "gen1\n").unwrap();
+            // Simulate prepare-env having been killed while blocked on its
+            // loader shell: a vars_<mark> file left behind, never cleaned up
+            // by the interrupted process's own inline `remove_file`.
+            let stray = runtime_path("vars_deadbeefcafe").unwrap();
+            std::fs::write(&stray, "mark=deadbeefcafe\n").unwrap();
+
+            end_generation(&FakeStateOps::default()).unwrap();
+
+            assert!(
+                !stray.exists(),
+                "stray vars_ file should be swept during abandoned-state resolution"
+            );
+        });
+        let _ = std::fs::remove_dir_all(&rt);
     }
 
     #[test]
