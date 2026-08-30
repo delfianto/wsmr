@@ -61,18 +61,26 @@ fi
 echo "PASS: journal confirms finalize's notify step actually ran and failed, killing the compositor's own process"
 
 echo "== asserting the compositor unit itself ended up failed, not stuck 'activating' =="
-# journald indexing can lag; retry briefly rather than treating that lag as a
-# real failure, same as every other journal-based check in this file.
+# The journal, not live systemd state, is the only usable source of truth
+# here: wayland-wm@.service carries CollectMode=inactive-or-failed (see
+# templates.rs), so systemd forgets the unit almost immediately once it
+# fails -- confirmed live, by trying exactly that approach first and
+# watching `systemctl --user show -p Result` come back empty even locally,
+# not just in CI. So the actual problem is journald indexing lag (confirmed
+# via a diagnostic dump on a real CI failure: the line was present moments
+# later, just not within the check's own retry window at the time) --
+# force a sync instead of guessing at a timeout.
+journalctl --user --sync 2>/dev/null || sudo journalctl --sync 2>/dev/null || true
 FAILED_OK=0
-for _ in $(seq 1 10); do
+for _ in $(seq 1 20); do
     if journalctl --user -n 500 --no-pager 2>/dev/null | grep -qE "wayland-wm@.*\.service: Failed with result"; then
         FAILED_OK=1
         break
     fi
-    sleep 0.5
+    sleep 0.3
 done
 if [ "$FAILED_OK" -ne 1 ]; then
-    echo "---- diagnostic: unit state ----" >&2
+    echo "---- diagnostic: unit status (may already be collected) ----" >&2
     systemctl --user status 'wayland-wm@*.service' --no-pager -l >&2 || true
     echo "---- diagnostic: all journal lines mentioning wayland-wm@ ----" >&2
     journalctl --user -n 500 --no-pager 2>/dev/null | grep -E "wayland-wm@" >&2 || true
