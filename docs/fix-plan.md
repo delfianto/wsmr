@@ -2127,25 +2127,69 @@ Phase 7 evidence:
 - [x] `fix!: restore uwsm-compatible CLI semantics` — Phase 2, not yet
   committed as of writing this line (commit follows this fix-plan update).
 - [x] `test: make the unit suite host-independent` — `3aadc94`.
-- [ ] `test: make Tier-B assertions functional`
+- [x] `test: make Tier-B assertions functional` — landed as `b82b0e3` ("fix:
+  make Tier-B smoke assert real lifecycle behavior, not just execute it")
+  — same substance as proposed, different prefix; this checkbox was simply
+  never ticked when it landed. Reconciled 2026-08-30.
 - [x] `fix: harden desktop-entry and blocking syscall behavior` — Phase 5,
   not yet committed as of writing this line (commit follows this fix-plan
   update).
-- [ ] `ci: run the Linux integration matrix`
+- [!] `ci: run the Linux integration matrix` — genuinely not done, not a
+  stale checkbox: confirmed `.github/workflows/ci.yml` has zero references
+  to Tier A/B as of 2026-08-30. Blocked on P6-02's own deferral (Tier B
+  needs privileged/rootful containers in CI, which this environment can't
+  provide or configure).
 - [x] `docs: align support, compatibility, and verification claims` — Phase
   6, not yet committed as of writing this line (commit follows this
   fix-plan update).
-- [ ] `test: add the disposable-user Hyprland live harness`
+- [x] `test: add the disposable-user Hyprland live harness` — landed as
+  `2ee417b` ("test: add a real, scripted Phase 7 harness (P7-02), replacing
+  ad-hoc checks") — same item, near-identical message; also simply never
+  ticked. Reconciled 2026-08-30.
 
 ## Final definition of done
 
-- [ ] All phase acceptance criteria are checked with evidence.
-- [ ] `cargo fmt --check` passes.
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` passes.
-- [ ] `cargo test` passes on supported development hosts.
-- [ ] `scripts/linux-test.sh` passes.
-- [ ] `scripts/linux-build.sh` passes.
-- [ ] Functional `scripts/linux-integration.sh` passes without ignored failures.
-- [ ] The authoritative merged coverage gate passes when configured.
-- [ ] The disposable-user CachyOS/Hyprland test passes twice consecutively.
-- [ ] Documentation states exactly what has and has not been verified.
+**Reconciled 2026-08-30**: every command-based item below was re-verified
+fresh at the current `HEAD` (not assumed from earlier evidence in this
+document) before being checked off.
+
+- [~] All phase acceptance criteria are checked with evidence — true in the
+  sense that matters (every criterion in every phase has been examined and
+  given an honest, evidenced status, including the ones marked `[~]`/`[!]`
+  rather than silently passed), but literally not all of them are `[x]`.
+  Left `[~]` rather than `[x]` so this line doesn't imply every criterion
+  fully closed — see the per-phase sections and the G0–G3 gates for exactly
+  which remain `[~]`/`[!]` and why (mostly structural: no CI access, no
+  second Linux distro, no real interactive VT login available here).
+- [x] `cargo fmt --check` passes. Re-run 2026-08-30: clean.
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` passes.
+  Re-run 2026-08-30: clean.
+- [x] `cargo test` passes on supported development hosts. Re-run
+  2026-08-30, native CachyOS host: 247 passed, 0 failed (228 lib + 18
+  main.rs + 1 integration).
+- [x] `scripts/linux-test.sh` passes. Re-run 2026-08-30 in the clean Debian
+  container: 247/247, matching the native result.
+- [x] `scripts/linux-build.sh` passes. Re-run 2026-08-30: `cargo build
+  --all-targets` + `cargo clippy -- -D warnings` both clean in-container.
+- [x] Functional `scripts/linux-integration.sh` passes without ignored
+  failures. Re-run 2026-08-30 at current `HEAD` (after the G1 `StateOps`
+  refactor, not just before it): all 19 `PASS:` lines, zero `|| true` on a
+  claimed behavior. All 6 of `scripts/linux-integration-failures.sh`'s
+  scenarios re-run the same way: all `PASSED`.
+- [ ] The authoritative merged coverage gate passes when configured. Not a
+  stale checkbox — genuinely never run, anywhere in this document's
+  history (confirmed by grep: coverage is discussed only as a goal/local
+  gate, never as an executed result). Real, sizable work still to do:
+  `scripts/coverage.sh merged`, gated at `--fail-under-lines 90`, hasn't
+  been attempted this session or, as far as this tracker's history shows,
+  ever.
+- [x] The disposable-user CachyOS/Hyprland test passes twice consecutively.
+  Phase 7's own acceptance criteria already established this — see "A
+  second login/logout cycle also passes" above (two clean start→verify→stop
+  cycles back to back on 2026-08-29, the first attempt's kmscon-VT conflict
+  aside) — reconciled here rather than re-litigated.
+- [x] Documentation states exactly what has and has not been verified. An
+  ongoing property, not a one-time action, but genuinely upheld in
+  practice: this very session caught and corrected a real overclaim (the
+  env-var root-cause mistake, see P7-03/known-issues.md) rather than
+  leaving it stand, which is itself evidence the tracker is doing its job.
