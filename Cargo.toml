@@ -6,10 +6,10 @@ rust-version = "1.98.0"
 
 [dependencies]
 anyhow = "1.0.104"
-clap = { version = "4.6.6", features = ["derive", "env"] }
-libc = "0.2.189"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+libc = "0.2.191"
 serde = { version = "1.0.229", features = ["derive"] }
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 zbus = "5.19.0"
 
 [lints.rust]
