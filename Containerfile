@@ -11,9 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Rust toolchain (stable; edition 2024 requires >= 1.85)
+# Rust toolchain (1.100.0)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --default-toolchain stable --profile minimal
+      | sh -s -- -y --default-toolchain 1.100.0 --profile minimal
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup component add clippy rustfmt
 ENV CARGO_TERM_COLOR=always

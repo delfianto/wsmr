@@ -11,8 +11,7 @@ use crate::filter;
 use std::collections::{BTreeMap, HashMap};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
-use zbus::proxy;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Type};
+use zbus::{Connection, OwnedObjectPath, OwnedVariant, Type, block_on, proxy};
 
 use serde::Deserialize;
 
@@ -181,7 +180,7 @@ pub trait Notifications {
         summary: &str,
         body: &str,
         actions: Vec<String>,
-        hints: HashMap<String, OwnedValue>,
+        hints: HashMap<String, OwnedVariant>,
         expire_timeout: i32,
     ) -> zbus::Result<u32>;
 }
@@ -189,25 +188,26 @@ pub trait Notifications {
 /// Connection to the **session** bus with the systemd-user / D-Bus / notify
 /// surface.
 pub struct SessionBus {
-    conn: zbus::blocking::Connection,
+    conn: Connection,
 }
 
 impl SessionBus {
     /// Connect to the session bus.
     pub fn connect() -> Result<Self> {
         Ok(Self {
-            conn: zbus::blocking::Connection::session()?,
+            conn: block_on(Connection::session())?,
         })
     }
 
-    fn manager(&self) -> Result<SystemdManagerProxyBlocking<'_>> {
-        Ok(SystemdManagerProxyBlocking::new(&self.conn)?)
+    async fn manager(&self) -> zbus::Result<SystemdManagerProxy<'_>> {
+        SystemdManagerProxy::new(&self.conn).await
     }
 
     /// Read the systemd activation environment, filtered to valid names.
     pub fn systemd_vars(&self) -> Result<BTreeMap<String, String>> {
         let mut map = BTreeMap::new();
-        for assignment in self.manager()?.environment()? {
+        let assignments = block_on(async { self.manager().await?.environment().await })?;
+        for assignment in assignments {
             if let Some((k, v)) = assignment.split_once('=')
                 && filter::keep_name(k)
             {
@@ -220,11 +220,14 @@ impl SessionBus {
     /// Whether the running D-Bus daemon is `dbus-broker` (which shares the
     /// systemd activation environment, so the separate D-Bus update is skipped).
     pub fn is_dbus_broker(&self) -> Result<bool> {
-        let path = self.manager()?.get_unit("dbus.service")?;
-        let unit = SystemdUnitProxyBlocking::builder(&self.conn)
-            .path(path)?
-            .build()?;
-        Ok(unit.id()? == "dbus-broker.service")
+        block_on(async {
+            let path = self.manager().await?.get_unit("dbus.service").await?;
+            let unit = SystemdUnitProxy::builder(&self.conn)
+                .path(path)
+                .build()
+                .await?;
+            Ok(unit.id().await? == "dbus-broker.service")
+        })
     }
 
     /// Export variables to systemd and, for classic dbus-daemon, the D-Bus
@@ -258,7 +261,7 @@ impl SessionBus {
 
     /// Reload the systemd user manager.
     pub fn reload(&self) -> Result<()> {
-        self.manager()?.reload()?;
+        block_on(async { self.manager().await?.reload().await })?;
         Ok(())
     }
 
@@ -270,49 +273,65 @@ impl SessionBus {
     ) -> Result<Vec<UnitInfo>> {
         let states = states.iter().map(|s| s.to_string()).collect();
         let patterns = patterns.iter().map(|s| s.to_string()).collect();
-        Ok(self.manager()?.list_units_by_patterns(states, patterns)?)
+        Ok(block_on(async {
+            self.manager()
+                .await?
+                .list_units_by_patterns(states, patterns)
+                .await
+        })?)
     }
 
     /// Stop a unit, returning the queued job path.
     pub fn stop_unit(&self, name: &str, mode: &str) -> Result<OwnedObjectPath> {
-        Ok(self.manager()?.stop_unit(name, mode)?)
+        Ok(block_on(async {
+            self.manager().await?.stop_unit(name, mode).await
+        })?)
     }
 
     /// List queued jobs.
     pub fn list_jobs(&self) -> Result<Vec<JobInfo>> {
-        Ok(self.manager()?.list_jobs()?)
+        Ok(block_on(async { self.manager().await?.list_jobs().await })?)
     }
 
     /// Post a simple desktop notification.
     pub fn notify(&self, summary: &str, body: &str) -> Result<u32> {
-        let n = NotificationsProxyBlocking::new(&self.conn)?;
-        Ok(n.notify(
-            "wsmr",
-            0,
-            "applications-system",
-            summary,
-            body,
-            Vec::new(),
-            HashMap::new(),
-            -1,
-        )?)
+        Ok(block_on(async {
+            let proxy = NotificationsProxy::new(&self.conn).await?;
+            proxy
+                .notify(
+                    "wsmr",
+                    0,
+                    "applications-system",
+                    summary,
+                    body,
+                    Vec::new(),
+                    HashMap::new(),
+                    -1,
+                )
+                .await
+        })?)
     }
 
-    fn service(&self, unit: &str) -> Result<SystemdServiceProxyBlocking<'_>> {
-        let path = self.manager()?.get_unit(unit)?;
-        Ok(SystemdServiceProxyBlocking::builder(&self.conn)
-            .path(path)?
-            .build()?)
+    async fn service(&self, unit: &str) -> zbus::Result<SystemdServiceProxy<'_>> {
+        let path = self.manager().await?.get_unit(unit).await?;
+        SystemdServiceProxy::builder(&self.conn)
+            .path(path)
+            .build()
+            .await
     }
 
     /// `NotifyAccess` of a service unit.
     pub fn service_notify_access(&self, unit: &str) -> Result<String> {
-        Ok(self.service(unit)?.notify_access()?)
+        Ok(block_on(async {
+            self.service(unit).await?.notify_access().await
+        })?)
     }
 
     /// `TimeoutStartUSec` of a service unit (microseconds).
     pub fn service_timeout_start_usec(&self, unit: &str) -> Result<u64> {
-        Ok(self.service(unit)?.timeout_start_usec()?)
+        Ok(block_on(async {
+            self.service(unit).await?.timeout_start_usec().await
+        })?)
     }
 
     /// Name of the active/activating `wayland-wm@*.service`, if any.
@@ -328,10 +347,7 @@ impl SessionBus {
     /// back). The wait is bounded because a stuck job must not hang the caller
     /// forever.
     ///
-    /// This polls `ListJobs` rather than subscribing to systemd's
-    /// `JobRemoved` signal; the latter would be preferable but needs
-    /// zbus's async signal-stream API, which nothing else in this
-    /// (deliberately blocking-only) crate uses yet.
+    /// Polling `ListJobs` also handles jobs that finish before this wait starts.
     pub fn wait_for_job(&self, job: &OwnedObjectPath, unit: &str, timeout: Duration) -> Result<()> {
         let start = Instant::now();
         loop {
@@ -350,46 +366,49 @@ impl SessionBus {
 
 /// Connection to the **system** bus with the logind surface.
 pub struct SystemBus {
-    conn: zbus::blocking::Connection,
+    conn: Connection,
 }
 
 impl SystemBus {
     /// Connect to the system bus.
     pub fn connect() -> Result<Self> {
         Ok(Self {
-            conn: zbus::blocking::Connection::system()?,
+            conn: block_on(Connection::system())?,
         })
     }
 
-    fn manager(&self) -> Result<LogindManagerProxyBlocking<'_>> {
-        Ok(LogindManagerProxyBlocking::new(&self.conn)?)
+    async fn manager(&self) -> zbus::Result<LogindManagerProxy<'_>> {
+        LogindManagerProxy::new(&self.conn).await
     }
 
     /// List login sessions.
     pub fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
-        Ok(self.manager()?.list_sessions()?)
+        Ok(block_on(async {
+            self.manager().await?.list_sessions().await
+        })?)
     }
 
-    fn session(&self, id: &str) -> Result<LogindSessionProxyBlocking<'_>> {
-        let path = self.manager()?.get_session(id)?;
-        Ok(LogindSessionProxyBlocking::builder(&self.conn)
-            .path(path)?
-            .build()?)
+    async fn session(&self, id: &str) -> zbus::Result<LogindSessionProxy<'_>> {
+        let path = self.manager().await?.get_session(id).await?;
+        LogindSessionProxy::builder(&self.conn)
+            .path(path)
+            .build()
+            .await
     }
 
     /// VT number of a login session.
     pub fn session_vtnr(&self, id: &str) -> Result<u32> {
-        Ok(self.session(id)?.vtnr()?)
+        Ok(block_on(async { self.session(id).await?.vtnr().await })?)
     }
 
     /// Leader PID of a login session.
     pub fn session_leader(&self, id: &str) -> Result<u32> {
-        Ok(self.session(id)?.leader()?)
+        Ok(block_on(async { self.session(id).await?.leader().await })?)
     }
 
     /// Whether a login session is remote.
     pub fn session_remote(&self, id: &str) -> Result<bool> {
-        Ok(self.session(id)?.remote()?)
+        Ok(block_on(async { self.session(id).await?.remote().await })?)
     }
 
     /// Find the login session on a given VT for the current user. Returns
@@ -463,16 +482,21 @@ pub trait EnvUpdateOps {
 
 impl EnvUpdateOps for SessionBus {
     fn set_environment(&self, assignments: Vec<String>) -> zbus::Result<()> {
-        SystemdManagerProxyBlocking::new(&self.conn)?.set_environment(assignments)
+        block_on(async { self.manager().await?.set_environment(assignments).await })
     }
     fn unset_environment(&self, names: Vec<String>) -> zbus::Result<()> {
-        SystemdManagerProxyBlocking::new(&self.conn)?.unset_environment(names)
+        block_on(async { self.manager().await?.unset_environment(names).await })
     }
     fn is_dbus_broker(&self) -> Result<bool> {
         SessionBus::is_dbus_broker(self)
     }
     fn update_activation_environment(&self, env: HashMap<String, String>) -> zbus::Result<()> {
-        DBusDaemonProxyBlocking::new(&self.conn)?.update_activation_environment(env)
+        block_on(async {
+            DBusDaemonProxy::new(&self.conn)
+                .await?
+                .update_activation_environment(env)
+                .await
+        })
     }
 }
 
@@ -546,23 +570,20 @@ impl StateOps for SessionBus {
 }
 
 impl SystemBus {
-    fn systemd(&self) -> Result<SystemdManagerProxyBlocking<'_>> {
-        Ok(SystemdManagerProxyBlocking::new(&self.conn)?)
-    }
-
     fn unit_active_state(&self, unit: &str) -> Result<Option<String>> {
-        let path = match self.systemd()?.get_unit(unit) {
-            Ok(p) => p,
-            // Genuinely absent unit → not-active. Anything else (a D-Bus
-            // transport/auth failure, say) is a real error and must be
-            // propagated, not silently read as "not active".
-            Err(e) if is_no_such_unit(&e) => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        let u = SystemdUnitProxyBlocking::builder(&self.conn)
-            .path(path)?
-            .build()?;
-        Ok(Some(u.active_state()?))
+        block_on(async {
+            let manager = SystemdManagerProxy::new(&self.conn).await?;
+            let path = match manager.get_unit(unit).await {
+                Ok(path) => path,
+                Err(error) if is_no_such_unit(&error) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            let proxy = SystemdUnitProxy::builder(&self.conn)
+                .path(path)
+                .build()
+                .await?;
+            Ok(Some(proxy.active_state().await?))
+        })
     }
 
     /// Poll a system unit until its `ActiveState` is in `states`, or until the

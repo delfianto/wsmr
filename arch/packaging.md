@@ -1,7 +1,7 @@
 # Local Arch package
 
-The `PKGBUILD` builds from the current checkout. It does not download a release
-archive because the project has no tagged release yet.
+The `PKGBUILD` packages the checksum-verified x86_64 binary archive from the
+matching [GitHub release](https://github.com/delfianto/wsmr/releases).
 
 ## Build and install
 
@@ -14,17 +14,13 @@ makepkg -si
 
 The package:
 
-- builds with `cargo build --frozen --release`;
-- runs `cargo test --frozen --release` in `check()`;
-- installs `/usr/bin/wsmr`;
+- installs `/usr/local/bin/wsmr`;
 - installs the documentation tree; and
 - installs `hyprland-wsmr.desktop` under the Wayland sessions directory.
 
-Use `makepkg --nocheck` only when deliberately skipping tests during local
-iteration.
-
-`pkgver()` reads the version from `Cargo.toml`. The checked-in `.SRCINFO` must
-still be regenerated after any `PKGBUILD` change:
+You can also download the ready-to-install `.pkg.tar.zst` from the release
+and install it with `sudo pacman -U`. For a new release, update `pkgver` and
+the archive checksum in `PKGBUILD`, then regenerate `.SRCINFO`:
 
 ```sh
 makepkg --printsrcinfo > .SRCINFO
@@ -35,7 +31,7 @@ makepkg --printsrcinfo > .SRCINFO
 The package's session entry runs:
 
 ```text
-wsmr start -e -D Hyprland hyprland.desktop
+/usr/local/bin/wsmr start -e -D Hyprland hyprland.desktop
 ```
 
 wsmr itself is compositor-independent; the package entry is not. Another
@@ -44,7 +40,7 @@ desktop name and command.
 
 ## Relationship to the hardware harness
 
-The disposable user may use the packaged `/usr/bin/wsmr`. Linux user accounts
+The disposable user may use the packaged `/usr/local/bin/wsmr`. Linux user accounts
 have separate homes, activation environments, and systemd user managers, so
 that remains isolated from the primary account.
 

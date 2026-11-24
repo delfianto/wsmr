@@ -22,6 +22,7 @@ target
 arch/pkg/
 arch/src/
 arch/*.pkg.tar.*
+arch/*.tar.gz
 arch/*.log
 
 # RustRover

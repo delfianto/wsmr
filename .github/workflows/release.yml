@@ -1,13 +1,9 @@
 name: Release
 
-# Tag-triggered. Builds the optimized + stripped release binary (the
-# `[profile.release]` from Cargo.toml) for the common desktop-Linux targets and
-# attaches tarballs to a DRAFT GitHub Release for you to review and publish.
-#
-#   git tag -a v0.1.0 -m 'v0.1.0' && git push origin v0.1.0
+# Attach portable Linux binaries to the published release.
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write # create the release + upload assets
@@ -46,7 +42,7 @@ jobs:
         env:
           # only consulted for the aarch64 target; empty for the others
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --locked --release --target ${{ matrix.target }}
       - name: Package
         run: |
           dist="wsmr-${{ github.ref_name }}-${{ matrix.target }}"
@@ -58,8 +54,6 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@v3
         with:
-          draft: true
-          generate_release_notes: true
           files: |
             wsmr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
             wsmr-${{ github.ref_name }}-${{ matrix.target }}.tar.gz.sha256

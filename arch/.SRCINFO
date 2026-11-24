@@ -1,13 +1,17 @@
 pkgbase = wsmr
-	pkgdesc = Wayland Session Manager in Rust — a systemd-managed standalone Wayland compositor session, ported from uwsm
-	pkgver = 0.1.0
+	pkgdesc = Systemd-managed Wayland session manager
+	pkgver = 0.2.0
 	pkgrel = 1
 	url = https://github.com/delfianto/wsmr
 	arch = x86_64
 	license = MIT
-	makedepends = cargo
+	depends = glibc
+	depends = libgcc
 	depends = systemd
 	depends = dbus
+	options = !strip
 	options = !debug
+	source = https://github.com/delfianto/wsmr/releases/download/v0.2.0/wsmr-v0.2.0-linux-x86_64.tar.gz
+	sha256sums = f69c4f9cefc4297079860c1f3e948c9ac33a0fccb01a944a2e3af00069eb92ba
 
 pkgname = wsmr

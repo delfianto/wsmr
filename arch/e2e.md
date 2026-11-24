@@ -29,7 +29,7 @@ Use one of these methods.
 ### Test the installed package
 
 Build and install the package from [packaging.md](packaging.md). The session
-picker entry is `Hyprland (wsmr-managed)` and it runs `/usr/bin/wsmr`.
+picker entry is `Hyprland (wsmr-managed)` and it runs `/usr/local/bin/wsmr`.
 
 ### Test the current checkout without packaging
 
@@ -132,4 +132,4 @@ rm -r /usr/local/libexec/wsmr-e2e
 rm /usr/share/wayland-sessions/wsmr-e2e.desktop
 ```
 
-They do not uninstall the Arch package or remove `/usr/bin/wsmr`.
+They do not uninstall the Arch package or remove `/usr/local/bin/wsmr`.
