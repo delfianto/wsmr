@@ -2,7 +2,7 @@
 
 This directory contains two separate tools:
 
-- [Local packaging](packaging.md) builds and installs `/usr/local/bin/wsmr` plus a
+- [Local packaging](packaging.md) builds and installs `/usr/bin/wsmr` plus a
   Hyprland display-manager entry.
 - [The real-hardware harness](e2e.md) runs a wsmr-managed Hyprland session in
   a disposable user account.
