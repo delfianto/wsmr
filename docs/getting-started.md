@@ -18,7 +18,7 @@ but should be treated as untested.
 
 ## Build and install
 
-The crate requires Rust 1.98 or newer.
+The crate requires Rust 1.100.0 or newer.
 
 ```sh
 cargo build --release --locked

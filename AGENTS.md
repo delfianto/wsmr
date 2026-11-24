@@ -88,13 +88,13 @@ global, and mutation is unsafe in Rust 2024.
 
 ## Rust conventions
 
-- Edition 2024; rustc 1.98 or newer, as declared in `Cargo.toml`.
+- Edition 2024; rustc 1.100.0 or newer, as declared in `Cargo.toml`.
 - Use `Result` for fallible work.
 - Use the typed library `Error` from `src/error.rs`; use `anyhow` at the binary
   boundary.
 - Reserve `panic!`, `unwrap`, and `expect` for genuine invariants.
 - Keep unsafe and FFI small. Every unsafe block needs a `SAFETY` comment.
-- The D-Bus layer is synchronous and uses `zbus::blocking`; do not introduce
+- The D-Bus layer exposes synchronous methods backed by `zbus::block_on`. Do not introduce
   an async runtime without a design reason.
 - Desktop-entry and XDG handling is intentionally hand-written for the subset
   wsmr needs.

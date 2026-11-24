@@ -317,7 +317,7 @@ mod tests {
             if !self.active {
                 return Ok(Vec::new());
             }
-            let path = zbus::zvariant::OwnedObjectPath::try_from("/").unwrap();
+            let path = zbus::OwnedObjectPath::try_from("/").unwrap();
             Ok(vec![crate::sysd::dbus::UnitInfo {
                 name: "wayland-wm@hyprland.desktop.service".into(),
                 description: String::new(),

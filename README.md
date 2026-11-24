@@ -22,6 +22,20 @@ Wayland compositor. It is not a desktop environment or a compositor chooser.
 > tested on real hardware, but no other compositor has been tested with wsmr.
 > Read [Known issues](docs/known-issues.md) before using it for a real login.
 
+## Arch Linux (x86_64)
+
+The package installs `wsmr` and the Hyprland display-manager entry. See [Arch packaging](arch/packaging.md) for details. Executables are installed under `/usr/local/bin`.
+
+Download the `.pkg.tar.zst` from [GitHub Releases](https://github.com/delfianto/wsmr/releases/latest)
+and install it with `sudo pacman -U ./<package-file>`, or build the package
+from the checksum-verified release archive with `makepkg -si`:
+
+```sh
+git clone --branch v0.2.0 https://github.com/delfianto/wsmr.git
+cd wsmr/arch
+makepkg -si
+```
+
 ## Quick start
 
 Requirements:
@@ -29,7 +43,7 @@ Requirements:
 - Linux with systemd, logind, and a working systemd user manager;
 - a D-Bus user session;
 - a Wayland compositor; and
-- Rust 1.98 or newer to build from source.
+- Rust 1.100.0 or newer to build from source.
 
 Build a portable release binary:
 

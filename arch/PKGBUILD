@@ -1,69 +1,24 @@
-# Maintainer: (local/dev package — not yet submitted to the AUR)
-#
-# Builds directly from the working tree this file lives in (arch/PKGBUILD,
-# one directory below the crate root) rather than fetching a release
-# tarball — there's no tagged release yet. Run makepkg from inside arch/
-# against your own checkout:
-#
-#   cd arch && makepkg -si
-#
-# This installs a normal /usr/bin/wsmr. The disposable E2E user may test this
-# package, or arch/e2e-install.sh can install a versioned work-in-progress
-# binary without touching /usr/bin. See arch/packaging.md.
-
 pkgname=wsmr
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
-pkgdesc="Wayland Session Manager in Rust — a systemd-managed standalone Wayland compositor session, ported from uwsm"
+pkgdesc='Systemd-managed Wayland session manager'
 arch=('x86_64')
-url="https://github.com/delfianto/wsmr"
+url='https://github.com/delfianto/wsmr'
 license=('MIT')
-depends=('systemd' 'dbus')
-makedepends=('cargo')
-options=('!debug')
-source=()
-sha256sums=()
-
-# One directory up: PKGBUILD lives in arch/, the crate root is its parent.
-_srcdir="$startdir/.."
-
-pkgver() {
-	# Keep pkgver honest against Cargo.toml instead of drifting from it.
-	awk -F'"' '/^version/{print $2; exit}' "$_srcdir/Cargo.toml"
-}
-
-prepare() {
-	cd "$_srcdir"
-	cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
-}
-
-build() {
-	cd "$_srcdir"
-	export RUSTUP_TOOLCHAIN=stable
-	cargo build --frozen --release
-}
-
-check() {
-	# Native (host) tests only — the same `cargo test` AGENTS.md documents as
-	# the primary loop, which on this real Linux build host also exercises
-	# the cfg(target_os = "linux") paths (pidfd waitpid, etc). Skip with
-	# `makepkg --nocheck` for a faster iterative build.
-	cd "$_srcdir"
-	export RUSTUP_TOOLCHAIN=stable
-	cargo test --frozen --release
-}
+depends=('glibc' 'libgcc' 'systemd' 'dbus')
+options=('!strip' '!debug')
+_archive="wsmr-v$pkgver-linux-x86_64"
+source=("$url/releases/download/v$pkgver/$_archive.tar.gz")
+sha256sums=('f69c4f9cefc4297079860c1f3e948c9ac33a0fccb01a944a2e3af00069eb92ba')
 
 package() {
-	cd "$_srcdir"
-	install -Dm0755 target/release/wsmr "$pkgdir/usr/bin/wsmr"
-	install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-	local docdir="$pkgdir/usr/share/doc/$pkgname"
-	install -Dm0644 README.md "$docdir/README.md"
-	install -dm0755 "$docdir/docs" "$docdir/arch"
-	cp -a docs/. "$docdir/docs/"
-	install -Dm0644 arch/README.md arch/packaging.md arch/e2e.md "$docdir/arch/"
-	# See arch/session/hyprland-wsmr.desktop's own header for why this is
-	# Hyprland-specific despite wsmr itself being compositor-agnostic.
-	install -Dm0644 arch/session/hyprland-wsmr.desktop \
-		"$pkgdir/usr/share/wayland-sessions/hyprland-wsmr.desktop"
+    cd "$srcdir/$_archive"
+    install -Dm0755 wsmr "$pkgdir/usr/local/bin/wsmr"
+    install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    local docdir="$pkgdir/usr/share/doc/$pkgname"
+    install -Dm0644 THIRD-PARTY-LICENSES "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-LICENSES"
+    install -Dm0644 README.md "$docdir/README.md"
+    install -dm0755 "$docdir"
+    cp -a docs arch "$docdir/"
+    install -Dm0644 hyprland-wsmr.desktop "$pkgdir/usr/share/wayland-sessions/hyprland-wsmr.desktop"
 }

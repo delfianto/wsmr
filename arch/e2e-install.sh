@@ -16,7 +16,7 @@
 #
 # What it deliberately does NOT do — the rest of arch/e2e.md's setup, on
 # purpose: create the disposable test user, write that user's Hyprland
-# config, touch /usr/bin/wsmr or the primary user's account, or run any part
+# config, touch /usr/local/bin/wsmr or the primary user's account, or run any part
 # of the actual verification harness (see scripts/e2e-harness.sh for that).
 set -euo pipefail
 

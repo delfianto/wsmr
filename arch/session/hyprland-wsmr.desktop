@@ -1,4 +1,4 @@
-# Real (non-E2E) wayland-sessions entry for a normal /usr/bin/wsmr install,
+# Real (non-E2E) wayland-sessions entry for a normal /usr/local/bin/wsmr install,
 # installed by arch/PKGBUILD's package(). Modeled directly on the real,
 # package-shipped hyprland-uwsm.desktop (/usr/share/wayland-sessions/, from
 # the `uwsm` Arch package) — same shape, `wsmr` swapped in for `uwsm`.
@@ -9,7 +9,7 @@
 [Desktop Entry]
 Name=Hyprland (wsmr-managed)
 Comment=An intelligent dynamic tiling Wayland compositor
-Exec=wsmr start -e -D Hyprland hyprland.desktop
-TryExec=wsmr
+Exec=/usr/local/bin/wsmr start -e -D Hyprland hyprland.desktop
+TryExec=/usr/local/bin/wsmr
 DesktopNames=Hyprland
 Type=Application

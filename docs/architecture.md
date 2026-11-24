@@ -47,8 +47,8 @@ envelope target, and lets systemd dependencies propagate startup and shutdown.
 
 ### Use blocking D-Bus calls
 
-The code uses blocking zbus interfaces. The workflow is mostly sequential and
-does not need an async runtime.
+The D-Bus client uses `zbus::block_on` to drive D-Bus calls and expose a
+synchronous interface to the rest of wsmr.
 
 ### Generate the full graph
 
