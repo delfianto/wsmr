@@ -1,6 +1,6 @@
 pkgbase = wsmr
 	pkgdesc = Systemd-managed Wayland session manager
-	pkgver = 0.2.0
+	pkgver = 0.2.1
 	pkgrel = 1
 	url = https://github.com/delfianto/wsmr
 	arch = x86_64
@@ -11,7 +11,7 @@ pkgbase = wsmr
 	depends = dbus
 	options = !strip
 	options = !debug
-	source = https://github.com/delfianto/wsmr/releases/download/v0.2.0/wsmr-v0.2.0-linux-x86_64.tar.gz
-	sha256sums = f69c4f9cefc4297079860c1f3e948c9ac33a0fccb01a944a2e3af00069eb92ba
+	source = https://github.com/delfianto/wsmr/releases/download/v0.2.1/wsmr-v0.2.1-linux-x86_64.tar.gz
+	sha256sums = 510dbf1575f5e598d4cf7ac8d40df849e686bc19f15dcb11e28d7a871151298a
 
 pkgname = wsmr

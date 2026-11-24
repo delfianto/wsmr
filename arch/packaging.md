@@ -14,7 +14,7 @@ makepkg -si
 
 The package:
 
-- installs `/usr/local/bin/wsmr`;
+- installs `/usr/bin/wsmr`;
 - installs the documentation tree; and
 - installs `hyprland-wsmr.desktop` under the Wayland sessions directory.
 
@@ -31,7 +31,7 @@ makepkg --printsrcinfo > .SRCINFO
 The package's session entry runs:
 
 ```text
-/usr/local/bin/wsmr start -e -D Hyprland hyprland.desktop
+/usr/bin/wsmr start -e -D Hyprland hyprland.desktop
 ```
 
 wsmr itself is compositor-independent; the package entry is not. Another
@@ -40,7 +40,7 @@ desktop name and command.
 
 ## Relationship to the hardware harness
 
-The disposable user may use the packaged `/usr/local/bin/wsmr`. Linux user accounts
+The disposable user may use the packaged `/usr/bin/wsmr`. Linux user accounts
 have separate homes, activation environments, and systemd user managers, so
 that remains isolated from the primary account.
 

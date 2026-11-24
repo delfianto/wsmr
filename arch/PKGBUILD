@@ -1,5 +1,5 @@
 pkgname=wsmr
-pkgver=0.2.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc='Systemd-managed Wayland session manager'
 arch=('x86_64')
@@ -9,11 +9,11 @@ depends=('glibc' 'libgcc' 'systemd' 'dbus')
 options=('!strip' '!debug')
 _archive="wsmr-v$pkgver-linux-x86_64"
 source=("$url/releases/download/v$pkgver/$_archive.tar.gz")
-sha256sums=('f69c4f9cefc4297079860c1f3e948c9ac33a0fccb01a944a2e3af00069eb92ba')
+sha256sums=('510dbf1575f5e598d4cf7ac8d40df849e686bc19f15dcb11e28d7a871151298a')
 
 package() {
     cd "$srcdir/$_archive"
-    install -Dm0755 wsmr "$pkgdir/usr/local/bin/wsmr"
+    install -Dm0755 wsmr "$pkgdir/usr/bin/wsmr"
     install -Dm0644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     local docdir="$pkgdir/usr/share/doc/$pkgname"
     install -Dm0644 THIRD-PARTY-LICENSES "$pkgdir/usr/share/licenses/$pkgname/THIRD-PARTY-LICENSES"
